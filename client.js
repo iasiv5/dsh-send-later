@@ -421,7 +421,9 @@ window.__ModuleLoader__.load({
         const onKey = (event) => {
           if (event.key === 'Escape') setOpen(false);
         };
-        const onResize = () => setOpen(false);
+        // Resize must NOT close the panel: on phones the soft keyboard fires a resize when the
+        // message field gains focus, which used to dismiss the card mid-edit. Reposition instead.
+        const onResize = () => updateAnchor();
         document.addEventListener('mousedown', onPointer);
         document.addEventListener('keydown', onKey);
         window.addEventListener('resize', onResize);
@@ -437,11 +439,7 @@ window.__ModuleLoader__.load({
         ? parseLocal(date, time)
         : new Date(Date.now() + preset.seconds * 1000);
 
-      const toggle = () => {
-        if (open) {
-          setOpen(false);
-          return;
-        }
+      const updateAnchor = () => {
         const rect = buttonRef.current ? buttonRef.current.getBoundingClientRect() : undefined;
         const narrow = window.innerWidth < 480;
         if (rect) {
@@ -458,6 +456,14 @@ window.__ModuleLoader__.load({
         } else {
           setAnchor((current) => ({ ...current, narrow }));
         }
+      };
+
+      const toggle = () => {
+        if (open) {
+          setOpen(false);
+          return;
+        }
+        updateAnchor();
         setMessage(undefined);
         setOpen(true);
       };

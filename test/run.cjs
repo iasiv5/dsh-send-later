@@ -321,6 +321,14 @@ const injected = slot.inject('session-test-1');
   win.document.body.style.removeProperty('--dsw-alias-brand-primary');
   win.document.body.style.removeProperty('--dsw-static-neutral-bluish-1000');
 
+  // 12. A viewport resize must not close the panel (mobile keyboard fires resize on focus).
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  check('panel is open before the resize', () => assert.ok(dialog));
+  await act(async () => { win.dispatchEvent(new win.Event('resize')); });
+  check('resize keeps the panel open (mobile keyboard regression)', () => assert.ok(dialogNode()));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+
   // 11. No JavaScript errors from the module itself.
   const moduleErrors = consoleErrors.filter((line) => /TypeError|ReferenceError|SyntaxError|slot entry crashed/.test(line));
   check('no TypeError/ReferenceError from the module', () => assert.equal(moduleErrors.length, 0, moduleErrors.join(' | ')));

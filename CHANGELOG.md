@@ -9,6 +9,7 @@ First real release on npm (the name was reserved by a `0.0.1` placeholder).
 - The message and the chosen preset are remembered across page reloads.
 - On narrow screens (under 480px) the panel renders as a full-width bottom sheet, fixing the clipped popover on phones.
 - Double-tapping Schedule now sends exactly one request.
+- Fix: viewport resize no longer closes the panel — on phones the soft keyboard fired a resize when the message field gained focus, which dismissed the card mid-edit; the panel repositions instead.
 - Pending sends list their send time as a compact relative label ("10分钟后", fixed-width column, the absolute time on hover).
 - Fix: scheduling failed with "cannot get property 'remote.schedule' without inject" — the face is now taken from the inject scope instead of the plugin context.
 - Compact panel: the title row carries a close button, the five presets fit one row in a segmented control, the send-time summary moved into the action row, and spacing tightened throughout.
