@@ -3,8 +3,10 @@
  * Adds a clock button before the composer's submit action. The popover asks for a delay
  * or a local time plus a message, then asks the Host Schedule service to deliver that
  * message to the current session as a one-shot task. Pending sends for this session are
- * listed in the panel and can be cancelled; the button shows a count badge. No timer or
- * delivery logic lives here — the Host Schedule service owns persistence and delivery.
+ * listed in the panel and can be cancelled; the button shows a count badge. The panel stays
+ * open after a successful schedule — the confirmation and the fresh row live in it, so closing
+ * it is always the user's call. No delivery logic lives here — the Host Schedule service owns
+ * persistence and delivery; the only client timer is the one-shot fresh-row highlight.
  */
 window.__ModuleLoader__.load({
   id: 'dsh-send-later',
@@ -117,6 +119,17 @@ window.__ModuleLoader__.load({
 
     const fallbackDict = /^zh/i.test(navigator.language || '') ? ZH : EN;
     const fallbackT = (key) => (fallbackDict[key] !== undefined ? fallbackDict[key] : (EN[key] !== undefined ? EN[key] : key));
+
+    /** One-shot stylesheet for the fresh-row highlight; keyed by id so re-apply is free. */
+    function ensureFlashStyles() {
+      try {
+        if (document.getElementById('dsh-send-later-flash')) return;
+        const style = document.createElement('style');
+        style.id = 'dsh-send-later-flash';
+        style.textContent = '@keyframes send-later-flash{from{background:var(--dsw-alias-interactive-bg-active)}to{background:var(--dsw-alias-bg-layer-1)}}';
+        document.head.appendChild(style);
+      } catch (_error) { /* cosmetic only; the panel works without it */ }
+    }
 
     const pad = (n) => String(n).padStart(2, '0');
     const dateValue = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -344,6 +357,7 @@ window.__ModuleLoader__.load({
         border: '1px solid var(--dsw-alias-border-l1)',
         background: 'var(--dsw-alias-bg-layer-1)',
       },
+      pendingRowFresh: { animation: 'send-later-flash 1.6s ease-out' },
       pendingWhen: { width: 78, flexShrink: 0, fontVariantNumeric: 'tabular-nums', textAlign: 'left', whiteSpace: 'nowrap' },
       pendingText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       pendingCancel: {
@@ -421,11 +435,12 @@ window.__ModuleLoader__.load({
       const [snippets, setSnippets] = useState(() => loadSnippets());
       const [quota, setQuota] = useState(undefined);
       const [message, setMessage] = useState(undefined);
+      const [highlightId, setHighlightId] = useState(undefined);
       const [solidAccent, setSolidAccent] = useState(false);
       const buttonRef = useRef(null);
       const panelRef = useRef(null);
       const aliveRef = useRef(true);
-      const timerRef = useRef(undefined);
+      const highlightTimerRef = useRef(undefined);
       const busyRef = useRef(false);
       const pendingRef = useRef([]);
       const nudgingRef = useRef(new Set());
@@ -436,10 +451,26 @@ window.__ModuleLoader__.load({
       openRef.current = open;
       const quotaRef = useRef(quota);
       quotaRef.current = quota;
+      /** One-shot fresh-row highlight; every transition that ends a scheduling session clears it. */
+      const clearFlash = () => {
+        if (highlightTimerRef.current !== undefined) {
+          clearTimeout(highlightTimerRef.current);
+          highlightTimerRef.current = undefined;
+        }
+        setHighlightId(undefined);
+      };
+      const flashRow = (id) => {
+        if (highlightTimerRef.current !== undefined) clearTimeout(highlightTimerRef.current);
+        setHighlightId(id);
+        highlightTimerRef.current = setTimeout(() => {
+          highlightTimerRef.current = undefined;
+          if (aliveRef.current) setHighlightId(undefined);
+        }, 1600);
+      };
 
       useEffect(() => () => {
         aliveRef.current = false;
-        if (timerRef.current !== undefined) clearTimeout(timerRef.current);
+        clearFlash();
       }, []);
 
       const sessionId = typeof props.sessionId === 'string' ? props.sessionId : '';
@@ -636,6 +667,7 @@ window.__ModuleLoader__.load({
         }
         updateAnchor();
         setMessage(undefined);
+        clearFlash();
         setOpen(true);
       };
 
@@ -700,9 +732,10 @@ window.__ModuleLoader__.load({
           }
           setMessage({ kind: 'done', text: t('donePrefix') + compactWhen(when) + t('doneSuffix') });
           refreshPending();
-          timerRef.current = setTimeout(() => {
-            if (aliveRef.current) setOpen(false);
-          }, 1600);
+          // The panel deliberately stays open: the confirmation and the fresh pending row are
+          // exactly what the user wants to see, and auto-dismissing them read as "the entry
+          // vanished with the card". Closing is the user's call (✕, outside tap, Escape).
+          if (createdId) flashRow(createdId);
         } else {
           const detail = (result && result.error && (result.error.message || result.error.code)) || '';
           setMessage({ kind: 'error', text: t('errFailed') + detail });
@@ -723,6 +756,8 @@ window.__ModuleLoader__.load({
         setBusyCancelId(undefined);
         if (result && result.ok) {
           storeValue(STORE_PENDING, loadRegistry().filter((r) => r.id !== id));
+          // The confirmation must not outlive the row it announced.
+          setMessage(undefined);
           refreshPending();
         } else {
           const detail = (result && result.error && (result.error.message || result.error.code)) || '';
@@ -831,7 +866,7 @@ window.__ModuleLoader__.load({
           h('div', { style: S.pendingLabel }, `${t('pendingTitle')} · ${pending.length}`),
           pending.map((item) => {
             const rel = relativeWhen(new Date(item.at), t);
-            return h('div', { key: item.id, style: S.pendingRow },
+            return h('div', { key: item.id, style: item.id === highlightId ? { ...S.pendingRow, ...S.pendingRowFresh } : S.pendingRow },
               h('span', { style: S.pendingWhen, 'data-when': '', title: rel.absolute }, rel.label),
               h('span', { style: S.pendingText, title: item.prompt }, item.prompt || item.id),
               h('button', {
@@ -857,6 +892,7 @@ window.__ModuleLoader__.load({
     return {
       inject: ['locale', 'slots', 'remote'],
       apply(ctx) {
+        ensureFlashStyles();
         ctx.effect(() => ctx.locale.register(NS, 'en', EN), 'send-later: en dictionary');
         ctx.effect(() => ctx.locale.register(NS, 'zh', ZH), 'send-later: zh dictionary');
         ctx.effect(() => {

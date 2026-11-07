@@ -177,9 +177,19 @@ const injected = slot.inject('session-test-1');
     assert.ok(Array.isArray(stored) && stored.some((e) => e.id === 'schedule-1' && e.sessionId === 'session-test-1'));
   });
   check('success message is shown', () => assert.ok(dialogNode() && dialogNode().textContent.includes('已排程，')));
+  check('panel stays open after success', () => assert.ok(dialogNode()));
+  await act(async () => { await sleep(50); }); // refreshPending settles and paints the fresh row
+  check('fresh row is highlighted once', () => assert.ok(dialogNode().querySelector('[style*="send-later-flash"]')));
   await act(async () => { await sleep(1700); });
-  check('panel closes after success', () => assert.equal(dialogNode(), null));
+  check('panel still open 1.7s later (no auto-dismiss)', () => assert.ok(dialogNode()));
+  check('fresh-row highlight has faded', () => assert.equal(dialogNode().querySelector('[style*="send-later-flash"]'), null));
+  check('confirmation survives the highlight fade', () => assert.ok(dialogNode().textContent.includes('已排程，')));
+  // Lifecycle (c): cancelling the row must clear the confirmation that announced it.
+  await act(async () => { dialogNode().querySelector('button[aria-label="取消这条发送"]').click(); });
   await act(async () => { await sleep(50); });
+  check('cancel success clears the confirmation', () => assert.ok(dialogNode() && !dialogNode().textContent.includes('已排程，')));
+  check('badge clears after the row is cancelled', () => assert.equal(badgeNode(), null));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
 
   // 3. Pending list, badge and cancel.
   // rowAt is sampled once and reused by the assertion below: deriving the expected time from
@@ -257,9 +267,9 @@ const injected = slot.inject('session-test-1');
   check('custom request uses at with local date, HH:mm:ss and zone', () => assert.deepEqual(calls[1].timing, {
     kind: 'at', at: { date: ymd(tomorrow), time: '09:00:00', time_zone: zone },
   }));
-  await act(async () => { await sleep(1700); });
 
   // 7. Prompt and preset are remembered across reopen.
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   await act(async () => { button.click(); });
   dialog = dialogNode();
   await act(async () => { setValue(dialog.querySelector('input[type="text"]'), '总结进度后暂停'); });
@@ -270,9 +280,11 @@ const injected = slot.inject('session-test-1');
     assert.equal(storeGet('dsh-send-later:v1:prompt'), '总结进度后暂停');
     assert.equal(storeGet('dsh-send-later:v1:preset'), '30m');
   });
-  await act(async () => { await sleep(1700); });
+  // Lifecycle (a): reopening after a success starts clean — the old confirmation is gone.
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   await act(async () => { button.click(); });
   dialog = dialogNode();
+  check('reopened panel starts without the old confirmation', () => assert.ok(dialog && !dialog.textContent.includes('已排程，')));
   check('reopened panel retains the edited prompt', () => assert.equal(dialog.querySelector('input[type="text"]').value, '总结进度后暂停'));
   check('reopened panel retains the preset choice', () => assert.equal(findButton(dialog, '30 分').getAttribute('aria-pressed'), 'true'));
   await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
@@ -292,7 +304,7 @@ const injected = slot.inject('session-test-1');
   await act(async () => { setValue(dialog.querySelector('input[type="text"]'), '查一下行情再继续'); });
   await act(async () => { findButton(dialog, '排程').click(); });
   check('custom prompt is recorded as the latest snippet', () => assert.deepEqual(storeGet('dsh-send-later:v1:snippets'), ['查一下行情再继续']));
-  await act(async () => { await sleep(1700); });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   await act(async () => { button.click(); });
   dialog = dialogNode();
   await act(async () => { setValue(dialog.querySelector('input[type="text"]'), '自定义乙'); });
@@ -300,7 +312,7 @@ const injected = slot.inject('session-test-1');
   check('a newer custom prompt replaces the snippet', () => assert.deepEqual(storeGet('dsh-send-later:v1:snippets'), ['自定义乙']));
   check('the strip still shows exactly two chips', () => assert.equal(
     qa('button svg[fill="currentColor"]', dialog).length, 2));
-  await act(async () => { await sleep(1700); });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   await act(async () => { button.click(); });
   dialog = dialogNode();
   await act(async () => { setValue(dialog.querySelector('input[type="text"]'), '继续'); });
@@ -308,7 +320,7 @@ const injected = slot.inject('session-test-1');
   check('the bare default prompt is not recorded as a snippet', () => {
     assert.deepEqual(storeGet('dsh-send-later:v1:snippets'), ['自定义乙']);
   });
-  await act(async () => { await sleep(1700); });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   win.localStorage.clear();
 
   // 8. Host failure keeps the panel open for a retry.
@@ -337,7 +349,7 @@ const injected = slot.inject('session-test-1');
     submitButton.click();
   });
   check('double tap sends exactly one request', () => assert.equal(calls.length - beforeDouble, 1));
-  await act(async () => { await sleep(1700); });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
 
   // 12. Solid accent under the official theme (ink-paired brand-primary), tonal under skins.
   win.document.body.style.setProperty('--dsw-alias-brand-primary', '#0f1115');

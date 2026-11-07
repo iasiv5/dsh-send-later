@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4
+
+The panel no longer dismisses itself after a successful schedule. The old auto-close read as "my entry vanished with the card": the confirmation and the fresh pending row were exactly what the user wanted to see, while a non-cancellable 1.6s timer killed the panel even mid-interaction — a stale timer could even close a panel reopened within the window.
+
+- The panel stays open after a successful schedule; closing is always the user's call (✕, outside tap, Escape). The count badge still covers the closed-panel state.
+- The confirmation clears only on the events that make it stale: panel close (a reopened panel starts clean), picking a new preset/snippet, or cancelling a pending row — a confirmation never outlives the row it announced.
+- The fresh pending row gets a one-shot background highlight (~1.6s fade, theme tokens only) so the new entry is immediately locatable.
+
 ## 0.2.3
 
 Silent delivery watchdog: when a scheduled send sits overdue with no delivery receipt (the Host timer loop drops failed one-shots), the plugin nudges the original task through the official run-now channel — up to 3 automatic redeliveries per task, 10 minutes apart, first attempt 5 minutes past due; archived destinations stop the nudging. No new UI; manual run-now stays in the official automation tasks page.
