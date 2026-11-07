@@ -26,15 +26,19 @@
 
 ## 📥 安装
 
-要求 DSH ≥ 0.2.2-rc.1。推荐通过 [DSH Marketplace（dsh-m）](https://github.com/iasiv5/dsh-m) 安装：
+要求 DSH ≥ 0.2.2-rc.1。以下两种方式任选其一。
 
-1. 打开 dsh-m 插件市场的「添加插件」对话框；
+### 方式一 · DSH 官方插件页直装
+
+1. 打开 DSH 的「插件管理」页，点击「添加插件」；
 2. 输入包名 `dsh-send-later`（或 GitHub 仓库地址 `iasiv5/dsh-send-later`）；
-3. 选择安装源，点击「安装」，完成后刷新页面即可生效。
+3. 选择可用安装源，点击「安装」，完成后刷新页面即可生效。
 
-<p align="center"><img src="https://raw.githubusercontent.com/iasiv5/dsh-send-later/main/docs/images/install-dialog.webp" alt="在 dsh-m「添加插件」对话框中输入包名安装" width="634"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/iasiv5/dsh-send-later/main/docs/images/official-plugin-install.webp" alt="在 DSH 官方插件管理页「添加插件」中输入包名安装" width="634"></p>
 
-也可以在 dsh-m 插件市场中搜索关键词「延时发送」或 `send-later` 直接安装。
+### 方式二 · dsh-m 插件市场搜索安装
+
+已安装 [DSH Marketplace（dsh-m）](https://github.com/iasiv5/dsh-m) 时，从侧栏进入「插件市场」，搜索关键词「延时发送」或 `send-later`，在卡片详情页一键安装。
 
 npm 包 [dsh-send-later](https://www.npmjs.com/package/dsh-send-later) 与本仓库同步发布；`0.0.x` 为占位版本，请使用 0.2.0 及以上。
 
@@ -43,18 +47,6 @@ npm 包 [dsh-send-later](https://www.npmjs.com/package/dsh-send-later) 与本仓
 1. 点击发送按钮左侧的时钟按钮，打开延时发送面板；
 2. 选择预设时长或「指定」日期与时间，填写发送内容（或点选快捷片段），点击「排程」；
 3. 面板下方的待发送列表支持随时取消（点 ✕）；到点后消息自动发送至当前会话。
-
-## 🧪 开发与测试
-
-```bash
-npm install   # 安装 react / react-dom / jsdom（仅测试用，不进入运行时依赖）
-npm test      # jsdom 离线渲染测试：面板、预设、排程请求、取消、待发列表、重复提交
-npm run security:check   # 依赖红线检查（运行时依赖必须为空）
-```
-
-## 📦 发布
-
-发版 = 打 tag：`npm version x.y.z && git push --tags`，GitHub Actions 以 OIDC Trusted Publishing 自动发布（workflow 见 `.github/workflows/publish.yml`）。
 
 ## ⚠️ 已知限制
 
