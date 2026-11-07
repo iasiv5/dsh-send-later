@@ -54,6 +54,7 @@ function makeCtx(scheduleFace) {
     },
     effect(fn) { const d = fn(); disposers.push(d); return d; },
     locale: { register: () => () => {} },
+    sessions: { list: { getSnapshot: () => ({ entries: [{ sessionId: 'session-test-1', title: '测试会话标题' }] }) } },
     inject(keys, cb) {
       // Hand the callback a scope exposing only the injected face, like the real Host does.
       if (scheduleFace) { cb({ remote: { schedule: ctx.remote.schedule } }); return () => {}; }
@@ -361,6 +362,27 @@ const injected = slot.inject('session-test-1');
   await act(async () => { win.dispatchEvent(new win.Event('resize')); });
   check('resize keeps the panel open (mobile keyboard regression)', () => assert.ok(dialogNode()));
   await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+
+  // 13. Quota reset line (quota-watch snapshot) and the session indicator.
+  win.fetch = async () => ({ ok: true, json: async () => ({ providers: [
+    { key: 'glm', status: 'ready', plan: { windows: [{ key: '5h', percent: 39, resetsAt: new Date(Date.now() + 7200000).toISOString() }] } },
+    { key: 'copilot', status: 'ready' },
+  ] }) });
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  check('quota line shows the GLM 5h window and percent', () => {
+    const text = dialogNode().textContent;
+    assert.ok(text.includes('GLM 5h'), 'no GLM 5h label');
+    assert.ok(text.includes('39'), 'no percent');
+  });
+  check('session indicator shows the current session title', () => assert.ok(dialogNode().textContent.includes('测试会话标题')));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  win.fetch = async () => ({ ok: false });
+  await act(async () => { button.click(); });
+  check('quota line hides when the quota source is unavailable', () => assert.equal(dialogNode().textContent.includes('GLM 5h'), false));
+  check('session indicator still shows without quota', () => assert.ok(dialogNode().textContent.includes('测试会话标题')));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  delete win.fetch;
 
   // 11. No JavaScript errors from the module itself.
   const moduleErrors = consoleErrors.filter((line) => /TypeError|ReferenceError|SyntaxError|slot entry crashed/.test(line));

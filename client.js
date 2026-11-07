@@ -51,6 +51,7 @@ window.__ModuleLoader__.load({
       errNoSession: 'No session is available.',
       errFailed: 'Scheduling failed: ',
       errDisabled: 'Send later is unavailable: the Automation tasks feature is disabled.',
+      quotaLine: 'GLM 5h {p}% · resets ~{t} ({r})',
       relSoon: '<1m',
       relMin: 'in {m}m',
       relHour: 'in {h}h',
@@ -91,6 +92,7 @@ window.__ModuleLoader__.load({
       errNoSession: '当前没有可用的会话。',
       errFailed: '排程失败：',
       errDisabled: '延时发送不可用：自动化任务（排程）功能未启用。',
+      quotaLine: 'GLM 5h {p}% · 预计 {t} 恢复（{r}）',
       relSoon: '1分钟内',
       relMin: '{m}分钟后',
       relHour: '{h}时后',
@@ -156,6 +158,25 @@ window.__ModuleLoader__.load({
         return (inkDark !== '' && primary === inkDark) || (inkLight !== '' && primary === inkLight);
       } catch (_error) {
         return false;
+      }
+    }
+
+    /** GLM 5h window from the quota-watch snapshot; null when the plugin or the window is absent. */
+    async function fetchGlm5hQuota() {
+      try {
+        const res = await fetch('/api/dsh-quota-watch/overview', { headers: { accept: 'application/json' } });
+        if (!res || !res.ok) return null;
+        const data = await res.json();
+        const providers = Array.isArray(data?.providers) ? data.providers : [];
+        const glm = providers.find((p) => p && p.key === 'glm' && p.status === 'ready')
+          ?? providers.find((p) => typeof p?.providerId === 'string' && p.providerId.startsWith('zai'));
+        const window5h = glm?.plan?.windows?.find((w) => w && w.key === '5h');
+        if (!window5h || typeof window5h.resetsAt !== 'string') return null;
+        const resetAt = Date.parse(window5h.resetsAt);
+        if (!Number.isFinite(resetAt)) return null;
+        return { percent: typeof window5h.percent === 'number' ? window5h.percent : undefined, resetAt };
+      } catch (_error) {
+        return null;
       }
     }
 
@@ -272,6 +293,8 @@ window.__ModuleLoader__.load({
         color: on ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)',
       }),
       snipText: { minWidth: 0, flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      sessionLine: { color: 'var(--dsw-alias-label-dimmed, var(--dsw-alias-label-secondary))', fontSize: 12, marginTop: -4 },
+      quotaLine: { color: 'var(--dsw-alias-label-dimmed, var(--dsw-alias-label-secondary))', fontSize: 12 },
       pendingList: {
         display: 'flex', flexDirection: 'column', gap: 4,
         borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: 8,
@@ -355,6 +378,8 @@ window.__ModuleLoader__.load({
       const [busyCancelId, setBusyCancelId] = useState(undefined);
       const [pending, setPending] = useState([]);
       const [snippets, setSnippets] = useState(() => loadSnippets());
+      const [quota, setQuota] = useState(undefined);
+      const [sessionTitle, setSessionTitle] = useState('');
       const [message, setMessage] = useState(undefined);
       const [solidAccent, setSolidAccent] = useState(false);
       const buttonRef = useRef(null);
@@ -366,6 +391,8 @@ window.__ModuleLoader__.load({
       const propsRef = useRef(props);
       propsRef.current = props;
       pendingRef.current = pending;
+      const openRef = useRef(false);
+      openRef.current = open;
 
       useEffect(() => () => {
         aliveRef.current = false;
@@ -431,7 +458,12 @@ window.__ModuleLoader__.load({
       useEffect(() => { refreshPending(); /* eslint-disable-line no-unused-vars */ }, [sessionId]);
       useEffect(() => {
         const id = window.setInterval(() => {
-          if (aliveRef.current && pendingRef.current.length > 0) refreshPending();
+          if (aliveRef.current && openRef.current) {
+            if (pendingRef.current.length > 0) refreshPending();
+            if (typeof propsRef.current.fetchQuota === 'function') {
+              propsRef.current.fetchQuota().then((q) => { if (aliveRef.current) setQuota(q && q.resetAt ? q : null); }).catch(() => {});
+            }
+          }
         }, 60000);
         return () => window.clearInterval(id);
       }, []);
@@ -445,6 +477,10 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!open) return undefined;
         refreshPending();
+        if (typeof propsRef.current.sessionTitle === 'function') setSessionTitle(propsRef.current.sessionTitle() || '');
+        if (typeof propsRef.current.fetchQuota === 'function') {
+          propsRef.current.fetchQuota().then((q) => { if (aliveRef.current) setQuota(q && q.resetAt ? q : null); }).catch(() => {});
+        }
         const onPointer = (event) => {
           if (panelRef.current && panelRef.current.contains(event.target)) return;
           if (buttonRef.current && buttonRef.current.contains(event.target)) return;
@@ -459,10 +495,20 @@ window.__ModuleLoader__.load({
         document.addEventListener('mousedown', onPointer);
         document.addEventListener('keydown', onKey);
         window.addEventListener('resize', onResize);
+        // Soft keyboards announce themselves on the visual viewport, not the window.
+        const vv = window.visualViewport;
+        if (vv) {
+          vv.addEventListener('resize', onResize);
+          vv.addEventListener('scroll', onResize);
+        }
         return () => {
           document.removeEventListener('mousedown', onPointer);
           document.removeEventListener('keydown', onKey);
           window.removeEventListener('resize', onResize);
+          if (vv) {
+            vv.removeEventListener('resize', onResize);
+            vv.removeEventListener('scroll', onResize);
+          }
         };
       }, [open]);
 
@@ -474,15 +520,20 @@ window.__ModuleLoader__.load({
       const updateAnchor = () => {
         const rect = buttonRef.current ? buttonRef.current.getBoundingClientRect() : undefined;
         const narrow = window.innerWidth < 480;
+        // Soft keyboards shrink the visual viewport; keep the panel above that edge when present.
+        const vv = window.visualViewport;
+        const keyboardEdge = vv ? Math.max(0, window.innerHeight - (vv.offsetTop + vv.height)) : 0;
+        const visualHeight = vv ? vv.height : window.innerHeight;
         if (rect) {
           // Keep the whole panel inside the viewport: on narrow phones render a bottom sheet.
           const width = Math.min(300, window.innerWidth - 16);
           const left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);
+          const aboveButton = window.innerHeight - rect.top + 8;
           setAnchor({
             left,
             width,
-            bottom: window.innerHeight - rect.top + 8,
-            maxHeight: Math.max(200, rect.top - 16),
+            bottom: narrow ? Math.max(8, keyboardEdge) : Math.max(aboveButton, keyboardEdge),
+            maxHeight: Math.max(200, Math.min(rect.top - 16, visualHeight - 40)),
             narrow,
           });
         } else {
@@ -591,6 +642,13 @@ window.__ModuleLoader__.load({
         }
       };
 
+      const quotaText = quota && quota.resetAt
+        ? t('quotaLine')
+            .replace('{p}', quota.percent === undefined ? '?' : String(quota.percent))
+            .replace('{t}', timeValue(new Date(quota.resetAt)))
+            .replace('{r}', relativeWhen(new Date(quota.resetAt), t).label)
+        : '';
+
       const button = h('span', { style: S.buttonWrap },
         h('button', {
           type: 'button',
@@ -619,6 +677,7 @@ window.__ModuleLoader__.load({
             onClick: () => setOpen(false),
             style: S.closeBtn,
           }, crossIcon())),
+        sessionTitle ? h('div', { style: S.sessionLine }, sessionTitle) : null,
         h('div', { style: S.chips }, PRESETS.map((item) => h('button', {
           key: item.id,
           type: 'button',
@@ -659,6 +718,7 @@ window.__ModuleLoader__.load({
               },
               style: S.snipChip(prompt.trim() === x, true),
             }, boltIcon(), h('span', { style: S.snipText }, x))))),
+        quota && quota.resetAt ? h('div', { style: S.quotaLine }, quotaText) : null,
         h('input', {
           id: 'dsh-send-later-prompt',
           type: 'text',
@@ -701,7 +761,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['locale', 'slots', 'remote'],
+      inject: ['locale', 'slots', 'remote', 'sessions'],
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, 'en', EN), 'send-later: en dictionary');
         ctx.effect(() => ctx.locale.register(NS, 'zh', ZH), 'send-later: zh dictionary');
@@ -730,6 +790,18 @@ window.__ModuleLoader__.load({
                 schedule: (request) => api.create(request),
                 listCatalog: () => api.catalog(),
                 cancelTask: (id) => api.edit({ id, action: 'delete' }),
+                sessionTitle: () => {
+                  try {
+                    const snap = ctx.sessions.list.getSnapshot();
+                    const entries = snap && Array.isArray(snap.entries) ? snap.entries
+                      : (Array.isArray(snap) ? snap : (snap && Array.isArray(snap.sessions) ? snap.sessions : []));
+                    const hit = entries.find((e) => e && e.sessionId === sessionId);
+                    return hit && typeof hit.title === 'string' ? hit.title : '';
+                  } catch (_error) {
+                    return '';
+                  }
+                },
+                fetchQuota: () => fetchGlm5hQuota(),
               }),
             }, SendLater));
           });
