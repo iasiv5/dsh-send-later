@@ -280,7 +280,7 @@ const injected = slot.inject('session-test-1');
   await act(async () => { snipChip.click(); });
   check('builtin snippet fills the prompt input', () => assert.equal(
     dialog.querySelector('input[type="text"]').value,
-    '继续：从中断处继续，不要开始与目标无关的新工作。'));
+    '从中断处继续，不要开始与目标无关的新工作。'));
   await act(async () => { setValue(dialog.querySelector('input[type="text"]'), '查一下行情再继续'); });
   await act(async () => { findButton(dialog, '排程').click(); });
   check('custom prompt is recorded as the latest snippet', () => assert.deepEqual(storeGet('dsh-send-later:v1:snippets'), ['查一下行情再继续']));

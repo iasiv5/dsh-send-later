@@ -57,7 +57,7 @@ window.__ModuleLoader__.load({
       relHourMin: 'in {h}h{m}m',
       relDay: 'in {d}d',
       snipResumeLabel: 'Safe resume',
-      snipResumeText: 'Continue: resume from where you left off; do not start unrelated new work.',
+      snipResumeText: 'Resume from where you left off; do not start unrelated new work.',
     };
 
     const ZH = {
@@ -97,7 +97,7 @@ window.__ModuleLoader__.load({
       relHourMin: '{h}时{m}分后',
       relDay: '{d}天后',
       snipResumeLabel: '安全继续',
-      snipResumeText: '继续：从中断处继续，不要开始与目标无关的新工作。',
+      snipResumeText: '从中断处继续，不要开始与目标无关的新工作。',
     };
 
     const PRESETS = [
