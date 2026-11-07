@@ -55,7 +55,8 @@ function makeCtx(scheduleFace) {
     effect(fn) { const d = fn(); disposers.push(d); return d; },
     locale: { register: () => () => {} },
     inject(keys, cb) {
-      if (scheduleFace) { cb(ctx); return () => {}; }
+      // Hand the callback a scope exposing only the injected face, like the real Host does.
+      if (scheduleFace) { cb({ remote: { schedule: ctx.remote.schedule } }); return () => {}; }
       return () => {};
     },
     slots: {
@@ -150,9 +151,9 @@ const injected = slot.inject('session-test-1');
   check('panel opens into document.body (portal)', () => assert.ok(dialog));
   check('panel has its dialog label', () => assert.equal(dialog.getAttribute('aria-label'), '延时发送到本会话'));
   check('five preset chips in order', () => assert.deepEqual(
-    qa('button', dialog).slice(0, 5).map((b) => b.textContent.trim()),
-    ['10 分钟后', '30 分钟后', '1 小时后', '5 小时后', '指定时间']));
-  check('10-minute preset is selected by default', () => assert.equal(findButton(dialog, '10 分钟后').getAttribute('aria-pressed'), 'true'));
+    qa('button[aria-pressed]', dialog).map((b) => b.textContent.trim()),
+    ['10 分', '30 分', '1 时', '5 时', '指定']));
+  check('10-minute preset is selected by default', () => assert.equal(findButton(dialog, '10 分').getAttribute('aria-pressed'), 'true'));
   check('prompt defaults to 继续', () => assert.equal(dialog.querySelector('input[type="text"]').value, '继续'));
   const plus10 = new Date(Date.now() + 600000);
   check('summary shows the 10-minute send time', () => assert.ok(
@@ -222,7 +223,7 @@ const injected = slot.inject('session-test-1');
 
   // 6. Custom time: past refused, future becomes an at-timing with the browser zone.
   await act(async () => { setValue(dialogNode().querySelector('input[type="text"]'), '继续'); });
-  await act(async () => { findButton(dialogNode(), '指定时间').click(); });
+  await act(async () => { findButton(dialogNode(), '指定').click(); });
   dialog = dialogNode();
   const dateInput = dialog.querySelector('input[type="date"]');
   const timeInput = dialog.querySelector('input[type="time"]');
@@ -248,7 +249,7 @@ const injected = slot.inject('session-test-1');
   await act(async () => { button.click(); });
   dialog = dialogNode();
   await act(async () => { setValue(dialog.querySelector('input[type="text"]'), '总结进度后暂停'); });
-  await act(async () => { findButton(dialog, '30 分钟后').click(); });
+  await act(async () => { findButton(dialog, '30 分').click(); });
   await act(async () => { findButton(dialogNode(), '排程').click(); });
   check('third submit uses the edited prompt', () => assert.equal(calls[2].prompt, '总结进度后暂停'));
   check('remembered prompt and preset are stored', () => {
@@ -259,7 +260,7 @@ const injected = slot.inject('session-test-1');
   await act(async () => { button.click(); });
   dialog = dialogNode();
   check('reopened panel retains the edited prompt', () => assert.equal(dialog.querySelector('input[type="text"]').value, '总结进度后暂停'));
-  check('reopened panel retains the preset choice', () => assert.equal(findButton(dialog, '30 分钟后').getAttribute('aria-pressed'), 'true'));
+  check('reopened panel retains the preset choice', () => assert.equal(findButton(dialog, '30 分').getAttribute('aria-pressed'), 'true'));
   await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   win.localStorage.clear();
 

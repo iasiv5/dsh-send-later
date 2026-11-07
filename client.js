@@ -22,11 +22,12 @@ window.__ModuleLoader__.load({
     const EN = {
       button: 'Send later',
       panelTitle: 'Send later to this session',
-      preset10m: 'In 10 min',
-      preset30m: 'In 30 min',
-      preset1h: 'In 1 hour',
-      preset5h: 'In 5 hours',
+      preset10m: '10m',
+      preset30m: '30m',
+      preset1h: '1h',
+      preset5h: '5h',
       presetCustom: 'Custom',
+      close: 'Close',
       date: 'Date',
       time: 'Time',
       promptLabel: 'Message',
@@ -54,11 +55,12 @@ window.__ModuleLoader__.load({
     const ZH = {
       button: '延时发送',
       panelTitle: '延时发送到本会话',
-      preset10m: '10 分钟后',
-      preset30m: '30 分钟后',
-      preset1h: '1 小时后',
-      preset5h: '5 小时后',
-      presetCustom: '指定时间',
+      preset10m: '10 分',
+      preset30m: '30 分',
+      preset1h: '1 时',
+      preset5h: '5 时',
+      presetCustom: '指定',
+      close: '关闭',
       date: '日期',
       time: '时间',
       promptLabel: '发送内容',
@@ -157,18 +159,24 @@ window.__ModuleLoader__.load({
         position: 'fixed', ...(anchor.narrow
           ? { left: 8, right: 8, bottom: 8, maxHeight: '70vh' }
           : { left: anchor.left, bottom: anchor.bottom, width: anchor.width, maxHeight: anchor.maxHeight }),
-        boxSizing: 'border-box', overflowY: 'auto', padding: 12,
-        display: 'flex', flexDirection: 'column', gap: 10, borderRadius: 12,
+        boxSizing: 'border-box', overflowY: 'auto', padding: 10,
+        display: 'flex', flexDirection: 'column', gap: 8, borderRadius: 12,
         border: '1px solid var(--dsw-alias-border-l1)',
         background: 'var(--dsw-alias-bg-overlay)',
         color: 'var(--dsw-alias-label-primary)',
         boxShadow: '0 8px 24px rgba(0, 0, 0, 0.18)',
         fontSize: 13, lineHeight: 1.4, zIndex: 1000,
       }),
-      heading: { fontWeight: 600 },
-      chips: { display: 'flex', flexWrap: 'wrap', gap: 6 },
+      header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
+      heading: { fontWeight: 600, fontSize: 13 },
+      closeBtn: {
+        width: 22, height: 22, padding: 0, borderRadius: 6, cursor: 'pointer',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        border: 'none', background: 'transparent', color: 'var(--dsw-alias-label-secondary)',
+      },
+      chips: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 },
       chip: (on) => ({
-        padding: '4px 10px', borderRadius: 999, cursor: 'pointer', fontSize: 12,
+        padding: '4px 0', borderRadius: 8, cursor: 'pointer', fontSize: 12, textAlign: 'center',
         border: `1px solid ${on ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l1)'}`,
         background: on ? 'var(--dsw-alias-interactive-bg-active)' : 'transparent',
         color: on ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)',
@@ -184,10 +192,13 @@ window.__ModuleLoader__.load({
         background: 'var(--dsw-alias-bg-layer-1)',
         color: 'var(--dsw-alias-label-primary)',
       },
-      summary: { color: 'var(--dsw-alias-label-secondary)' },
+      summary: { flex: 1, minWidth: 0, color: 'var(--dsw-alias-label-secondary)', fontSize: 12 },
       error: { color: 'var(--dsw-alias-state-error-primary)' },
       done: { color: 'var(--dsw-alias-state-success-primary)' },
-      pendingList: { display: 'flex', flexDirection: 'column', gap: 4 },
+      pendingList: {
+        display: 'flex', flexDirection: 'column', gap: 4,
+        borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: 8,
+      },
       pendingLabel: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12 },
       pendingRow: {
         display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 8,
@@ -202,7 +213,7 @@ window.__ModuleLoader__.load({
         border: '1px solid var(--dsw-alias-border-l2)',
         background: 'transparent', color: 'var(--dsw-alias-label-secondary)',
       },
-      footer: { display: 'flex', justifyContent: 'flex-end', gap: 8 },
+      footer: { display: 'flex', alignItems: 'center', gap: 8 },
       secondary: {
         padding: '6px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 13,
         border: '1px solid var(--dsw-alias-border-l2)',
@@ -493,7 +504,15 @@ window.__ModuleLoader__.load({
         'aria-label': t('panelTitle'),
         style: S.panel(anchor),
       },
-        h('div', { style: S.heading }, t('panelTitle')),
+        h('div', { style: S.header },
+          h('div', { style: S.heading }, t('panelTitle')),
+          h('button', {
+            type: 'button',
+            'aria-label': t('close'),
+            title: t('close'),
+            onClick: () => setOpen(false),
+            style: S.closeBtn,
+          }, crossIcon())),
         h('div', { style: S.chips }, PRESETS.map((item) => h('button', {
           key: item.id,
           type: 'button',
@@ -525,7 +544,6 @@ window.__ModuleLoader__.load({
             },
             style: S.input,
           })),
-        previewAt ? h('div', { style: S.summary }, t('summaryPrefix') + compactWhen(previewAt) + t('summarySuffix')) : null,
         pending.length > 0 ? h('div', { style: S.pendingList },
           h('div', { style: S.pendingLabel }, `${t('pendingTitle')} · ${pending.length}`),
           pending.map((item) => h('div', { key: item.id, style: S.pendingRow },
@@ -542,7 +560,7 @@ window.__ModuleLoader__.load({
           : null,
         message ? h('div', { role: 'status', style: message.kind === 'error' ? S.error : S.done }, message.text) : null,
         h('div', { style: S.footer },
-          h('button', { type: 'button', onClick: () => setOpen(false), style: S.secondary }, t('cancel')),
+          previewAt ? h('div', { style: S.summary }, t('summaryPrefix') + compactWhen(previewAt) + t('summarySuffix')) : null,
           h('button', { type: 'button', onClick: submit, disabled: busy, style: S.primary(busy) }, busy ? t('busy') : t('submit'))));
 
       return h(React.Fragment, null,
@@ -565,8 +583,11 @@ window.__ModuleLoader__.load({
             inject: () => ({}),
           }, InertControl));
           let disposeFull;
-          const undoInject = ctx.inject(['remote.schedule'], () => {
+          const undoInject = ctx.inject(['remote.schedule'], (scope) => {
             if (disposeFull) return;
+            // Access the face through the inject scope: touching ctx.remote.schedule here
+            // would throw "cannot get property ... without inject" (strict Local getters).
+            const api = (scope && scope.remote && scope.remote.schedule) || (scope && scope['remote.schedule']);
             disposePlaceholder();
             disposeFull = ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
               name: 'conversation.input.right',
@@ -574,9 +595,9 @@ window.__ModuleLoader__.load({
               locale: NS,
               inject: (sessionId) => ({
                 sessionId,
-                schedule: (request) => ctx.remote.schedule.create(request),
-                listCatalog: () => ctx.remote.schedule.catalog(),
-                cancelTask: (id) => ctx.remote.schedule.edit({ id, action: 'delete' }),
+                schedule: (request) => api.create(request),
+                listCatalog: () => api.catalog(),
+                cancelTask: (id) => api.edit({ id, action: 'delete' }),
               }),
             }, SendLater));
           });
