@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+Quota-aware custom time (the prefill), published hours after 0.2.0 which lacked it.
+
 ## 0.2.0
 
 First real release on npm (the name was reserved by a `0.0.1` placeholder).
