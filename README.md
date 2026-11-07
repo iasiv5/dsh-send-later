@@ -4,7 +4,7 @@
   <a href="https://www.npmjs.com/package/dsh-send-later"><img src="https://img.shields.io/npm/v/dsh-send-later" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/npm/l/dsh-send-later" alt="license"></a>
   <img src="https://img.shields.io/node/v/dsh-send-later" alt="node version">
-  <img src="https://img.shields.io/badge/DSH-%E2%89%A5%200.2.2--rc.1-blue" alt="DSH version">
+  <a href="#%EF%B8%8F-%E5%B7%B2%E7%9F%A5%E9%99%90%E5%88%B6"><img src="https://img.shields.io/badge/DSH-0.2.2--rc.1%20verified-2563eb" alt="DSH 0.2.2-rc.1 verified"></a>
 </p>
 
 <p align="center"><b>延时发送</b> —— 为 DeepSeek Harness（DSH）打造的定时消息插件。<br>
@@ -31,7 +31,7 @@
 ### 方式一 · DSH 官方插件页直装
 
 1. 打开 DSH 的「插件管理」页，点击「添加插件」；
-2. 输入包名 `dsh-send-later`（或 GitHub 仓库地址 `iasiv5/dsh-send-later`）；
+2. 输入包名 `dsh-send-later`；
 3. 选择可用安装源，点击「安装」，完成后刷新页面即可生效。
 
 <p align="center"><img src="https://raw.githubusercontent.com/iasiv5/dsh-send-later/main/docs/images/official-plugin-install.webp" alt="在 DSH 官方插件管理页「添加插件」中输入包名安装" width="634"></p>
