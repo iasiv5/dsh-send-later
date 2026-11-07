@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+Silent delivery watchdog: when a scheduled send sits overdue with no delivery receipt (the Host timer loop drops failed one-shots), the plugin nudges the original task through the official run-now channel — up to 3 automatic redeliveries per task, 10 minutes apart, first attempt 5 minutes past due; archived destinations stop the nudging. No new UI; manual run-now stays in the official automation tasks page.
+
 ## 0.2.2
 
 Presentation release: house-style gradient icon (clock + departing paper plane), plugin-page meta (annotated title + one-line description, zh/en) in the sibling format, showcase-format README with webp screenshots and dual install paths (official plugin page / dsh-m). No UI or behavior changes.
