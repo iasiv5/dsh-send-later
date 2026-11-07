@@ -139,7 +139,7 @@ const injected = slot.inject('session-test-1');
   inertDiv.remove();
 
   await act(async () => { root.render(React.createElement(slot.component, injected)); });
-  await act(async () => { await sleep(0); }); // mount refresh (catalog) settles
+  await act(async () => { await sleep(50); }); // mount refresh (catalog) settles
   const button = container.querySelector('button[aria-label="延时发送"]');
 
   // 1. Static render and default panel state.
@@ -175,7 +175,7 @@ const injected = slot.inject('session-test-1');
   check('success message is shown', () => assert.ok(dialogNode() && dialogNode().textContent.includes('已排程，')));
   await act(async () => { await sleep(1700); });
   check('panel closes after success', () => assert.equal(dialogNode(), null));
-  await act(async () => { await sleep(0); });
+  await act(async () => { await sleep(50); });
 
   // 3. Pending list, badge and cancel.
   nextCatalog = async () => ({
@@ -186,7 +186,7 @@ const injected = slot.inject('session-test-1');
     ],
   });
   await act(async () => { button.click(); });
-  await act(async () => { await sleep(0); });
+  await act(async () => { await sleep(50); });
   dialog = dialogNode();
   check('badge shows one pending send for this session', () => assert.equal(badgeNode() && badgeNode().textContent, '1'));
   check('pending row is listed with its prompt', () => assert.ok(dialog.textContent.includes('待发送') && dialog.textContent.includes('继续')));
@@ -199,7 +199,7 @@ const injected = slot.inject('session-test-1');
   check('other sessions are not listed', () => assert.equal(qa('[style*="pendingRow"]', dialog).length === 0 ? dialog.querySelectorAll('div').length >= 0 : true, true));
   nextCatalog = async () => ({ ok: true, value: [] }); // the host no longer lists the task after deletion
   await act(async () => { dialog.querySelector('button[aria-label="取消这条发送"]').click(); });
-  await act(async () => { await sleep(0); });
+  await act(async () => { await sleep(50); });
   check('cancel calls schedule edit delete', () => assert.deepEqual(cancelCalls[0], { id: 'schedule-1', action: 'delete' }));
   check('badge clears after cancel', () => assert.equal(badgeNode(), null));
   await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
@@ -213,7 +213,7 @@ const injected = slot.inject('session-test-1');
   });
   win.localStorage.removeItem('dsh-send-later:v1:pending');
   await act(async () => { button.click(); });
-  await act(async () => { await sleep(0); });
+  await act(async () => { await sleep(50); });
   dialog = dialogNode();
   check('task created on another device is adopted by title prefix', () => assert.equal(badgeNode() && badgeNode().textContent, '1'));
   await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
