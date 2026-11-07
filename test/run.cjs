@@ -190,6 +190,12 @@ const injected = slot.inject('session-test-1');
   dialog = dialogNode();
   check('badge shows one pending send for this session', () => assert.equal(badgeNode() && badgeNode().textContent, '1'));
   check('pending row is listed with its prompt', () => assert.ok(dialog.textContent.includes('待发送') && dialog.textContent.includes('继续')));
+  check('pending row shows relative time with absolute on hover', () => {
+    const when = dialog.querySelector('span[data-when]');
+    assert.ok(when, 'span[data-when] not found');
+    assert.equal(when.textContent, '10分钟后');
+    assert.ok(when.title.includes(hm(plus10)), `title was: ${when.title}`);
+  });
   check('other sessions are not listed', () => assert.equal(qa('[style*="pendingRow"]', dialog).length === 0 ? dialog.querySelectorAll('div').length >= 0 : true, true));
   nextCatalog = async () => ({ ok: true, value: [] }); // the host no longer lists the task after deletion
   await act(async () => { dialog.querySelector('button[aria-label="取消这条发送"]').click(); });

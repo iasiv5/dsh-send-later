@@ -50,6 +50,11 @@ window.__ModuleLoader__.load({
       errNoSession: 'No session is available.',
       errFailed: 'Scheduling failed: ',
       errDisabled: 'Send later is unavailable: the Automation tasks feature is disabled.',
+      relSoon: '<1m',
+      relMin: 'in {m}m',
+      relHour: 'in {h}h',
+      relHourMin: 'in {h}h{m}m',
+      relDay: 'in {d}d',
     };
 
     const ZH = {
@@ -83,6 +88,11 @@ window.__ModuleLoader__.load({
       errNoSession: '当前没有可用的会话。',
       errFailed: '排程失败：',
       errDisabled: '延时发送不可用：自动化任务（排程）功能未启用。',
+      relSoon: '1分钟内',
+      relMin: '{m}分钟后',
+      relHour: '{h}时后',
+      relHourMin: '{h}时{m}分后',
+      relDay: '{d}天后',
     };
 
     const PRESETS = [
@@ -100,6 +110,22 @@ window.__ModuleLoader__.load({
     const dateValue = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     const timeValue = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
     const compactWhen = (d) => (d.getTime() - Date.now() > 86400000 ? `${dateValue(d).slice(5)} ${timeValue(d)}` : timeValue(d));
+
+    /** Pending rows show a relative label ("in 10 min"); the absolute time rides on the title attribute. */
+    function relativeWhen(when, t) {
+      const d = when instanceof Date ? when : new Date(when);
+      const absolute = `${dateValue(d)} ${timeValue(d)}`;
+      const diff = d.getTime() - Date.now();
+      if (!Number.isFinite(diff) || diff < 0) return { label: absolute, absolute };
+      const minutes = Math.round(diff / 60000);
+      if (minutes < 1) return { label: t('relSoon'), absolute };
+      if (minutes < 60) return { label: t('relMin').replace('{m}', String(minutes)), absolute };
+      const hours = Math.floor(minutes / 60);
+      if (hours >= 24) return { label: t('relDay').replace('{d}', String(Math.floor(hours / 24))), absolute };
+      return minutes % 60 === 0
+        ? { label: t('relHour').replace('{h}', String(hours)), absolute }
+        : { label: t('relHourMin').replace('{h}', String(hours)).replace('{m}', String(minutes % 60)), absolute };
+    }
 
     function parseLocal(date, time) {
       const [year, month, day] = String(date).split('-').map(Number);
@@ -205,7 +231,7 @@ window.__ModuleLoader__.load({
         border: '1px solid var(--dsw-alias-border-l1)',
         background: 'var(--dsw-alias-bg-layer-1)',
       },
-      pendingWhen: { flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
+      pendingWhen: { width: 78, flexShrink: 0, fontVariantNumeric: 'tabular-nums', textAlign: 'left', whiteSpace: 'nowrap' },
       pendingText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       pendingCancel: {
         flexShrink: 0, width: 22, height: 22, padding: 0, borderRadius: 6, cursor: 'pointer',
@@ -546,17 +572,20 @@ window.__ModuleLoader__.load({
           })),
         pending.length > 0 ? h('div', { style: S.pendingList },
           h('div', { style: S.pendingLabel }, `${t('pendingTitle')} · ${pending.length}`),
-          pending.map((item) => h('div', { key: item.id, style: S.pendingRow },
-            h('span', { style: S.pendingWhen }, compactWhen(new Date(item.at))),
-            h('span', { style: S.pendingText, title: item.prompt }, item.prompt || item.id),
-            h('button', {
-              type: 'button',
-              'aria-label': t('cancelTask'),
-              title: t('cancelTask'),
-              disabled: busyCancelId !== undefined,
-              onClick: () => cancelPending(item.id),
-              style: S.pendingCancel,
-            }, busyCancelId === item.id ? t('cancelling').slice(0, 1) : crossIcon()))))
+          pending.map((item) => {
+            const rel = relativeWhen(new Date(item.at), t);
+            return h('div', { key: item.id, style: S.pendingRow },
+              h('span', { style: S.pendingWhen, 'data-when': '', title: rel.absolute }, rel.label),
+              h('span', { style: S.pendingText, title: item.prompt }, item.prompt || item.id),
+              h('button', {
+                type: 'button',
+                'aria-label': t('cancelTask'),
+                title: t('cancelTask'),
+                disabled: busyCancelId !== undefined,
+                onClick: () => cancelPending(item.id),
+                style: S.pendingCancel,
+              }, busyCancelId === item.id ? t('cancelling').slice(0, 1) : crossIcon()));
+          }))
           : null,
         message ? h('div', { role: 'status', style: message.kind === 'error' ? S.error : S.done }, message.text) : null,
         h('div', { style: S.footer },
