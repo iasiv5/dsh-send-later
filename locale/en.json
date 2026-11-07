@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Send later",
-    "description": "Schedule a follow-up message, such as Continue, into the current session after a delay or at a chosen time."
+    "title": "Send later (dsh-send-later)",
+    "description": "Schedule a delayed or timed message (default: Continue) beside the composer; it sends when due and survives restarts."
   }
 }

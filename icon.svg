@@ -1,5 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <rect x="4" y="4" width="56" height="56" rx="14" fill="#247bbf"/>
-  <circle cx="32" cy="32" r="18" fill="none" stroke="#ffffff" stroke-width="5"/>
-  <path d="M32 22v11l7 5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="dsh-send-later">
+  <!-- dsh-send-later 延时发送：时钟（蓝渐变）走到排程时刻，一枚纸飞机（青渐变）
+       恰好自表沿东北向离表起飞 = 到点把排好的消息自动发进当前会话 -->
+  <circle cx="15.5" cy="20.5" r="9.5" stroke="url(#b)" stroke-width="3.4" fill="none"/>
+  <path d="M15.5 15.6V20.5l3.6 2.2" stroke="url(#b)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M32 4L23 8.5l3.5 1 1 4.5L32 4Z" fill="url(#t)"/>
+  <defs>
+    <linearGradient id="b" x1="6" y1="11" x2="25" y2="30" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#69B9FF"/>
+      <stop offset="1" stop-color="#324DE2"/>
+    </linearGradient>
+    <linearGradient id="t" x1="23" y1="13" x2="32" y2="4" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#45E7A4"/>
+      <stop offset="1" stop-color="#05909D"/>
+    </linearGradient>
+  </defs>
 </svg>
