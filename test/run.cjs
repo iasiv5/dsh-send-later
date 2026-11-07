@@ -36,6 +36,8 @@ const def = captured.factory((id) => ({ react: React, 'react-dom': ReactDOM })[i
 
 const calls = [];
 const cancelCalls = [];
+const runCalls = [];
+let nextRun = async () => ({ ok: true, value: {} });
 let next = async (request) => { calls.push(request); return { ok: true, value: { id: `schedule-${calls.length}` } }; };
 let nextCatalog = async () => ({ ok: true, value: [] });
 let nextEdit = async (request) => { cancelCalls.push(request); return { ok: true, value: {} }; };
@@ -50,6 +52,7 @@ function makeCtx(scheduleFace) {
         create: (request) => next(request),
         catalog: () => nextCatalog(),
         edit: (request) => nextEdit(request),
+        run: (request) => { runCalls.push(request); return nextRun(); },
       },
     },
     effect(fn) { const d = fn(); disposers.push(d); return d; },
@@ -119,6 +122,7 @@ check('face on: full api is exposed', () => {
   assert.equal(typeof inj.schedule, 'function');
   assert.equal(typeof inj.listCatalog, 'function');
   assert.equal(typeof inj.cancelTask, 'function');
+  assert.equal(typeof inj.runTask, 'function');
 });
 const injected = slot.inject('session-test-1');
 
@@ -178,11 +182,15 @@ const injected = slot.inject('session-test-1');
   await act(async () => { await sleep(50); });
 
   // 3. Pending list, badge and cancel.
+  // rowAt is sampled once and reused by the assertion below: deriving the expected time from
+  // plus10 (captured seconds earlier in scenario 1) flakes whenever a minute boundary falls
+  // between the two samples.
+  const rowAt = new Date(Date.now() + 600000);
   nextCatalog = async () => ({
     ok: true,
     value: [
-      { id: 'schedule-1', status: 'active', target: { kind: 'session', sessionId: 'session-test-1' }, title: '延时发送：继续', prompt: '继续', scheduledAt: new Date(Date.now() + 600000).toISOString() },
-      { id: 'other-1', status: 'active', target: { kind: 'session', sessionId: 'session-other' }, title: '延时发送：继续', prompt: '继续', scheduledAt: new Date(Date.now() + 600000).toISOString() },
+      { id: 'schedule-1', status: 'active', target: { kind: 'session', sessionId: 'session-test-1' }, title: '延时发送：继续', prompt: '继续', scheduledAt: rowAt.toISOString() },
+      { id: 'other-1', status: 'active', target: { kind: 'session', sessionId: 'session-other' }, title: '延时发送：继续', prompt: '继续', scheduledAt: rowAt.toISOString() },
     ],
   });
   await act(async () => { button.click(); });
@@ -194,7 +202,7 @@ const injected = slot.inject('session-test-1');
     const when = dialog.querySelector('span[data-when]');
     assert.ok(when, 'span[data-when] not found');
     assert.equal(when.textContent, '10分钟后');
-    assert.ok(when.title.includes(hm(plus10)), `title was: ${when.title}`);
+    assert.ok(when.title.includes(hm(rowAt)), `title was: ${when.title}`);
   });
   check('other sessions are not listed', () => assert.equal(qa('[style*="pendingRow"]', dialog).length === 0 ? dialog.querySelectorAll('div').length >= 0 : true, true));
   nextCatalog = async () => ({ ok: true, value: [] }); // the host no longer lists the task after deletion
@@ -392,7 +400,83 @@ const injected = slot.inject('session-test-1');
   });
   await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
 
-  // 11. No JavaScript errors from the module itself.
+  // 11. Delivery watchdog (silent auto-redelivery via schedule/run).
+  const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+  const stalledEntry = () => ({
+    id: 'stall-1', status: 'active', kind: 'at',
+    title: '延时发送：继续', prompt: '继续',
+    scheduledAt: iso(15 * 60000),
+    target: { kind: 'session', sessionId: 'session-test-1' },
+  });
+  nextCatalog = async () => ({ ok: true, value: [stalledEntry()] });
+  win.localStorage.clear();
+  await act(async () => { button.click(); }); // panel open → refreshPending → watchdog
+  await act(async () => { await sleep(80); }); // nudge chain: fresh re-check + run
+  check('watchdog nudges a stalled delivery exactly once', () => assert.equal(runCalls.length, 1));
+  check('watchdog run targets the stalled task id', () => assert.deepEqual(runCalls[0], { id: 'stall-1' }));
+  check('watchdog records the nudge budget', () => {
+    const book = storeGet('dsh-send-later:v1:nudges');
+    assert.equal(book['stall-1'].count, 1);
+    assert.ok(typeof book['stall-1'].lastAt === 'number');
+  });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await act(async () => { await sleep(30); });
+
+  // 12. Budget spacing: a poll right after a nudge must not re-nudge.
+  nextCatalog = async () => ({ ok: true, value: [stalledEntry()] });
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(80); });
+  check('gap guard suppresses an immediate second nudge', () => assert.equal(runCalls.length, 1));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await act(async () => { await sleep(30); });
+
+  // 13. Budget cap: 3 recorded nudges stop auto-redelivery.
+  win.localStorage.setItem('dsh-send-later:v1:nudges', JSON.stringify({ 'stall-1': { count: 3, lastAt: Date.now() - 11 * 60000 } }));
+  nextCatalog = async () => ({ ok: true, value: [stalledEntry()] });
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(80); });
+  check('budget cap stops automatic nudges', () => assert.equal(runCalls.length, 1));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await act(async () => { await sleep(30); });
+
+  // 14. Ownership, receipt and in-flight guards: none of these may be nudged.
+  nextCatalog = async () => ({ ok: true, value: [
+    { ...stalledEntry(), id: 'acked-1', lastDelivery: { scheduledAt: iso(15 * 60000), deliveredAt: iso(14 * 60000), messageId: 'm1', targetSessionId: 'session-test-1' } },
+    { ...stalledEntry(), id: 'flying-1', executionActive: true },
+    { ...stalledEntry(), id: 'foreign-1', title: '官方页手建任务', prompt: 'x' },
+  ] });
+  win.localStorage.removeItem('dsh-send-later:v1:nudges');
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(80); });
+  check('acknowledged, in-flight and foreign tasks are not nudged', () => assert.equal(runCalls.length, 1));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await act(async () => { await sleep(30); });
+
+  // 15. Archived destination short-circuits the watchdog.
+  nextCatalog = async () => ({ ok: true, value: [stalledEntry()] });
+  nextRun = async () => ({ ok: false, error: { code: 'schedule/target-archived', message: 'archived' } });
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(80); });
+  check('archived error consumes one nudge', () => assert.equal(runCalls.length, 2));
+  check('archived task is flagged to stop future nudges', () => {
+    const book = storeGet('dsh-send-later:v1:nudges');
+    assert.equal(book['stall-1'].archived, true);
+  });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await act(async () => { await sleep(30); });
+  // Phase 2 must isolate the archived flag as the ONLY suppressing force: reopen the panel
+  // (a click while open would just toggle it shut) AND wind the gap clock outside the window,
+  // otherwise the 10-minute gap guard masks the archived branch and the check stays vacuous.
+  win.localStorage.setItem('dsh-send-later:v1:nudges', JSON.stringify({ 'stall-1': { count: 1, lastAt: Date.now() - 11 * 60000, archived: true } }));
+  nextCatalog = async () => ({ ok: true, value: [stalledEntry()] });
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(80); });
+  check('archived task gets no further nudges even outside the gap window', () => assert.equal(runCalls.length, 2));
+  nextRun = async () => ({ ok: true, value: {} });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  win.localStorage.removeItem('dsh-send-later:v1:nudges');
+
+  // 16. No JavaScript errors from the module itself.
   const moduleErrors = consoleErrors.filter((line) => /TypeError|ReferenceError|SyntaxError|slot entry crashed/.test(line));
   check('no TypeError/ReferenceError from the module', () => assert.equal(moduleErrors.length, 0, moduleErrors.join(' | ')));
 

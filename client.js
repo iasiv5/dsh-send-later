@@ -19,6 +19,13 @@ window.__ModuleLoader__.load({
     const STORE_PROMPT = 'dsh-send-later:v1:prompt';
     const STORE_PRESET = 'dsh-send-later:v1:preset';
     const STORE_SNIPPETS = 'dsh-send-later:v1:snippets';
+    const STORE_NUDGES = 'dsh-send-later:v1:nudges';
+    // Watchdog cadence: first nudge once a send is 5 minutes past due, then every 10 minutes,
+    // at most 3 automatic nudges per task. Manual redelivery stays in the official page.
+    const NUDGE_GRACE_MS = 5 * 60000;
+    const NUDGE_GAP_MS = 10 * 60000;
+    const NUDGE_MAX = 3;
+    const ARCHIVED_CODE = 'schedule/target-archived';
 
     const EN = {
       button: 'Send later',
@@ -209,6 +216,42 @@ window.__ModuleLoader__.load({
         ?.filter((e) => e && typeof e.id === 'string' && typeof e.sessionId === 'string') ?? [];
     }
 
+    /** Per-task watchdog bookkeeping: { [taskId]: { count, lastAt, archived? } }. Best-effort memory. */
+    function loadNudges() {
+      return loadStored(STORE_NUDGES, (v) => v && typeof v === 'object' && !Array.isArray(v)) ?? {};
+    }
+    function recordNudge(id, now) {
+      const map = loadNudges();
+      const book = map[id] && typeof map[id] === 'object' ? map[id] : {};
+      map[id] = { count: (typeof book.count === 'number' ? book.count : 0) + 1, lastAt: now };
+      storeValue(STORE_NUDGES, map);
+    }
+    function markArchived(id) {
+      const map = loadNudges();
+      const book = map[id] && typeof map[id] === 'object' ? map[id] : {};
+      map[id] = { count: typeof book.count === 'number' ? book.count : 0, lastAt: typeof book.lastAt === 'number' ? book.lastAt : Date.now(), archived: true };
+      storeValue(STORE_NUDGES, map);
+    }
+    /** A delivery the Host stopped driving: still active, past due by the grace window,
+     * nothing in flight, and no delivery was ever acknowledged. */
+    function isStalledDelivery(entry, now) {
+      return Boolean(entry && entry.status === 'active'
+        && typeof entry.scheduledAt === 'string'
+        && !entry.executionActive
+        && entry.lastDelivery === undefined
+        && Number.isFinite(Date.parse(entry.scheduledAt))
+        && Date.parse(entry.scheduledAt) + NUDGE_GRACE_MS <= now);
+    }
+    /** Whether the per-task budget allows an automatic nudge right now. */
+    function autoNudgeDue(entry, nudges, now) {
+      const book = nudges[entry.id];
+      if (book && book.archived) return false;
+      const count = book && typeof book.count === 'number' ? book.count : 0;
+      if (count >= NUDGE_MAX) return false;
+      const lastAt = book && typeof book.lastAt === 'number' ? book.lastAt : -Infinity;
+      return now - lastAt >= NUDGE_GAP_MS;
+    }
+
     /** The most recent custom prompt (the strip shows exactly two chips: builtin + this). */
     function loadSnippets() {
       return loadStored(STORE_SNIPPETS, (v) => Array.isArray(v))
@@ -385,6 +428,7 @@ window.__ModuleLoader__.load({
       const timerRef = useRef(undefined);
       const busyRef = useRef(false);
       const pendingRef = useRef([]);
+      const nudgingRef = useRef(new Set());
       const propsRef = useRef(props);
       propsRef.current = props;
       pendingRef.current = pending;
@@ -400,6 +444,27 @@ window.__ModuleLoader__.load({
 
       const sessionId = typeof props.sessionId === 'string' ? props.sessionId : '';
       const canList = typeof props.listCatalog === 'function';
+
+      /** Nudge one stalled task through the official run-now face. Re-reads the catalog first so a
+       * task the Host just delivered itself is never delivered twice (run-now has no ended guard). */
+      async function nudge(id) {
+        const props = propsRef.current;
+        try {
+          if (typeof props.runTask !== 'function' || typeof props.listCatalog !== 'function') return;
+          const result = await props.listCatalog();
+          const entries = result && result.ok ? result.value : undefined;
+          const entry = Array.isArray(entries) ? entries.find((candidate) => candidate && candidate.id === id) : undefined;
+          if (!isStalledDelivery(entry, Date.now())) return;
+          const outcome = await props.runTask(id);
+          if (outcome && outcome.ok === false && outcome.error && outcome.error.code === ARCHIVED_CODE) {
+            markArchived(id);
+          }
+        } catch (_error) {
+          /* silent: the next poll retries within budget */
+        } finally {
+          nudgingRef.current.delete(id);
+        }
+      }
 
       const refreshPending = async () => {
         const sid = propsRef.current.sessionId;
@@ -424,11 +489,13 @@ window.__ModuleLoader__.load({
         const byId = new Map(entries.map((entry) => [entry.id, entry]));
         const live = [];
         const seen = new Set();
+        const owned = new Set(); // catalog entries this session owns (registry id or title prefix) — NOT bare isOurs, which only matches the session
         for (const r of loadRegistry()) {
           const entry = byId.get(r.id);
           if (entry && isOurs(entry) && !seen.has(r.id)) {
             live.push({ id: r.id, at: entry.scheduledAt || r.at, prompt: typeof entry.prompt === 'string' ? entry.prompt : r.prompt || '' });
             seen.add(r.id);
+            owned.add(r.id);
           }
         }
         // Adopt tasks created elsewhere (another browser/device) that carry our title marker.
@@ -437,6 +504,7 @@ window.__ModuleLoader__.load({
             && typeof entry.title === 'string' && entry.title.startsWith(prefix)) {
             live.push({ id: entry.id, at: entry.scheduledAt, prompt: typeof entry.prompt === 'string' ? entry.prompt : '' });
             seen.add(entry.id);
+            owned.add(entry.id);
           }
         }
         // Keep just-created entries the catalog does not know about yet (catalog can lag behind a create).
@@ -450,6 +518,19 @@ window.__ModuleLoader__.load({
         }
         live.sort((a, b) => String(a.at).localeCompare(String(b.at)));
         storeValue(STORE_PENDING, live.map((x) => ({ id: x.id, sessionId: sid, at: x.at, prompt: x.prompt })));
+        // Delivery watchdog (silent): the Host timer loop drops failed one-shots, so a stalled
+        // task can wait forever for the next unrelated schedule event. Nudge it via run-now
+        // on a per-task budget; manual redelivery stays in the official automation page.
+        // Scope = owned only (registry id or title prefix): the session's other active tasks
+        // (e.g. hand-created in the official automation page) are never touched.
+        const nudges = loadNudges();
+        for (const entry of entries) {
+          if (!owned.has(entry.id) || nudgingRef.current.has(entry.id)) continue;
+          if (!isStalledDelivery(entry, now) || !autoNudgeDue(entry, nudges, now)) continue;
+          nudgingRef.current.add(entry.id);
+          recordNudge(entry.id, now);
+          void nudge(entry.id);
+        }
         setPending(live);
       };
 
@@ -463,6 +544,15 @@ window.__ModuleLoader__.load({
               propsRef.current.fetchQuota().then((q) => { if (aliveRef.current) setQuota(q && q.resetAt ? q : null); }).catch(() => {});
             }
           }
+        }, 60000);
+        return () => window.clearInterval(id);
+      }, []);
+
+      // Watchdog heartbeat: the stalled-delivery scan rides the same catalog poll the open
+      // panel already pays; keep one light tick while the panel is closed and sends are pending.
+      useEffect(() => {
+        const id = window.setInterval(() => {
+          if (aliveRef.current && !openRef.current && pendingRef.current.length > 0) refreshPending();
         }, 60000);
         return () => window.clearInterval(id);
       }, []);
@@ -794,6 +884,7 @@ window.__ModuleLoader__.load({
                 schedule: (request) => api.create(request),
                 listCatalog: () => api.catalog(),
                 cancelTask: (id) => api.edit({ id, action: 'delete' }),
+                runTask: (id) => api.run({ id }),
                 fetchQuota: () => fetchGlm5hQuota(),
               }),
             }, SendLater));
