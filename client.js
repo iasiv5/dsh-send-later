@@ -135,6 +135,25 @@ window.__ModuleLoader__.load({
       return Number.isNaN(when.getTime()) ? undefined : when;
     }
 
+    /**
+     * Official theme paints brand-primary as the neutral ink statics; skins themes paint their own
+     * accent. Comparing the computed value against the ink statics tells the two apart, so the
+     * submit button can be solid under the official theme and tonal under skins themes.
+     */
+    function detectSolidAccent() {
+      try {
+        const cs = getComputedStyle(document.body);
+        const read = (n) => cs.getPropertyValue(n).trim().toLowerCase();
+        const primary = read('--dsw-alias-brand-primary');
+        if (primary === '') return false;
+        const inkDark = read('--dsw-static-neutral-bluish-1000');
+        const inkLight = read('--dsw-static-neutral-bluish-50');
+        return (inkDark !== '' && primary === inkDark) || (inkLight !== '' && primary === inkLight);
+      } catch (_error) {
+        return false;
+      }
+    }
+
     function browserTimeZone() {
       try {
         return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -177,8 +196,10 @@ window.__ModuleLoader__.load({
       }),
       badge: {
         position: 'absolute', top: -5, right: -5, minWidth: 14, height: 14, padding: '0 4px',
-        borderRadius: 7, background: 'var(--dsw-alias-brand-primary)',
-        color: 'var(--dsw-alias-brand-primary-invert)', fontSize: 10, fontWeight: 600,
+        borderRadius: 7, border: '1px solid var(--dsw-alias-border-l1)',
+        background: 'var(--dsw-alias-bg-overlay)',
+        color: 'var(--dsw-alias-brand-text, var(--dsw-alias-label-primary))',
+        fontSize: 10, fontWeight: 600,
         display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none',
       },
       panel: (anchor) => ({
@@ -200,12 +221,17 @@ window.__ModuleLoader__.load({
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         border: 'none', background: 'transparent', color: 'var(--dsw-alias-label-secondary)',
       },
-      chips: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 },
+      chips: {
+        display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 2, padding: 2,
+        borderRadius: 10, border: '1px solid var(--dsw-alias-border-l1)',
+        background: 'var(--dsw-alias-bg-layer-1)',
+      },
       chip: (on) => ({
         padding: '4px 0', borderRadius: 8, cursor: 'pointer', fontSize: 12, textAlign: 'center',
-        border: `1px solid ${on ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l1)'}`,
-        background: on ? 'var(--dsw-alias-interactive-bg-active)' : 'transparent',
+        border: `1px solid ${on ? 'var(--dsw-alias-border-l2)' : 'transparent'}`,
+        background: on ? 'var(--dsw-alias-bg-overlay)' : 'transparent',
         color: on ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)',
+        boxShadow: on ? '0 1px 2px rgba(0, 0, 0, 0.08)' : 'none',
       }),
       row: { display: 'flex', gap: 8 },
       field: {
@@ -245,11 +271,14 @@ window.__ModuleLoader__.load({
         border: '1px solid var(--dsw-alias-border-l2)',
         background: 'transparent', color: 'var(--dsw-alias-label-primary)',
       },
-      primary: (busy) => ({
-        padding: '6px 12px', borderRadius: 8, cursor: busy ? 'default' : 'pointer', fontSize: 13,
-        border: 'none', opacity: busy ? 0.6 : 1,
-        background: 'var(--dsw-alias-brand-primary)',
-        color: 'var(--dsw-alias-brand-primary-invert)',
+      primary: (solid) => ({
+        padding: '6px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 13,
+        border: solid ? '1px solid transparent' : '1px solid var(--dsw-alias-border-l2)',
+        opacity: solid ? 1 : 1,
+        // Solid under the official theme (its brand accent is ink; use the host's blue like the
+        // send button does), tonal under skins themes (their invert tokens are not guaranteed).
+        background: solid ? '#4176e6' : 'var(--dsw-alias-interactive-bg-active, var(--dsw-alias-bg-layer-2))',
+        color: solid ? '#ffffff' : 'var(--dsw-alias-brand-text, var(--dsw-alias-label-primary))',
       }),
     };
 
@@ -295,6 +324,7 @@ window.__ModuleLoader__.load({
       const [busyCancelId, setBusyCancelId] = useState(undefined);
       const [pending, setPending] = useState([]);
       const [message, setMessage] = useState(undefined);
+      const [solidAccent, setSolidAccent] = useState(false);
       const buttonRef = useRef(null);
       const panelRef = useRef(null);
       const aliveRef = useRef(true);
@@ -373,6 +403,12 @@ window.__ModuleLoader__.load({
         }, 60000);
         return () => window.clearInterval(id);
       }, []);
+
+      // Re-detect on mount and whenever the panel opens (a skin switch swaps the token sheet).
+      useEffect(() => { setSolidAccent(detectSolidAccent()); }, []);
+      useEffect(() => {
+        if (open) setSolidAccent(detectSolidAccent());
+      }, [open]);
 
       useEffect(() => {
         if (!open) return undefined;
@@ -590,7 +626,7 @@ window.__ModuleLoader__.load({
         message ? h('div', { role: 'status', style: message.kind === 'error' ? S.error : S.done }, message.text) : null,
         h('div', { style: S.footer },
           previewAt ? h('div', { style: S.summary }, t('summaryPrefix') + compactWhen(previewAt) + t('summarySuffix')) : null,
-          h('button', { type: 'button', onClick: submit, disabled: busy, style: S.primary(busy) }, busy ? t('busy') : t('submit'))));
+          h('button', { type: 'button', onClick: submit, disabled: busy, style: { ...S.primary(solidAccent), opacity: busy ? 0.6 : 1 } }, busy ? t('busy') : t('submit'))));
 
       return h(React.Fragment, null,
         button,

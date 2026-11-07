@@ -298,6 +298,29 @@ const injected = slot.inject('session-test-1');
   check('double tap sends exactly one request', () => assert.equal(calls.length - beforeDouble, 1));
   await act(async () => { await sleep(1700); });
 
+  // 12. Solid accent under the official theme (ink-paired brand-primary), tonal under skins.
+  win.document.body.style.setProperty('--dsw-alias-brand-primary', '#0f1115');
+  win.document.body.style.setProperty('--dsw-static-neutral-bluish-1000', '#0f1115');
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  check('official ink pairing switches the submit button to solid blue', () => {
+    const submitBtn = findButton(dialog, '排程');
+    assert.equal(submitBtn.style.background, 'rgb(65, 118, 230)');
+    assert.equal(submitBtn.style.color, 'rgb(255, 255, 255)');
+  });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  win.document.body.style.setProperty('--dsw-alias-brand-primary', '#3ec1e8');
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  check('skins accent keeps the tonal submit button', () => {
+    const submitBtn = findButton(dialog, '排程');
+    assert.equal(submitBtn.style.background, 'var(--dsw-alias-interactive-bg-active, var(--dsw-alias-bg-layer-2))');
+    assert.equal(submitBtn.style.color, 'var(--dsw-alias-brand-text, var(--dsw-alias-label-primary))');
+  });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  win.document.body.style.removeProperty('--dsw-alias-brand-primary');
+  win.document.body.style.removeProperty('--dsw-static-neutral-bluish-1000');
+
   // 11. No JavaScript errors from the module itself.
   const moduleErrors = consoleErrors.filter((line) => /TypeError|ReferenceError|SyntaxError|slot entry crashed/.test(line));
   check('no TypeError/ReferenceError from the module', () => assert.equal(moduleErrors.length, 0, moduleErrors.join(' | ')));

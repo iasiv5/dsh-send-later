@@ -11,7 +11,8 @@ First real release on npm (the name was reserved by a `0.0.1` placeholder).
 - Double-tapping Schedule now sends exactly one request.
 - Pending sends list their send time as a compact relative label ("10分钟后", fixed-width column, the absolute time on hover).
 - Fix: scheduling failed with "cannot get property 'remote.schedule' without inject" — the face is now taken from the inject scope instead of the plugin context.
-- Compact panel: the title row carries a close button, the five presets fit one row, the send-time summary moved into the action row, and spacing tightened throughout.
+- Compact panel: the title row carries a close button, the five presets fit one row in a segmented control, the send-time summary moved into the action row, and spacing tightened throughout.
+- Submit button and count badge follow a theme-safe color scheme: solid brand blue under the official theme, tonal accent under dsh-skins themes (detected at runtime from the token sheet), with readable text guaranteed on every theme.
 - If the Automation tasks feature is disabled in the profile, the clock button renders greyed out with an explanatory tooltip instead of disappearing; it upgrades to the full control as soon as the schedule service is available.
 - npm publish metadata: unscoped package, `engines.dsh >= 0.2.2-rc.1`, MIT license, GitHub Actions OIDC release workflow.
 
