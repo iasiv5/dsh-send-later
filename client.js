@@ -18,6 +18,7 @@ window.__ModuleLoader__.load({
     const STORE_PENDING = 'dsh-send-later:v1:pending';
     const STORE_PROMPT = 'dsh-send-later:v1:prompt';
     const STORE_PRESET = 'dsh-send-later:v1:preset';
+    const STORE_SNIPPETS = 'dsh-send-later:v1:snippets';
 
     const EN = {
       button: 'Send later',
@@ -55,6 +56,8 @@ window.__ModuleLoader__.load({
       relHour: 'in {h}h',
       relHourMin: 'in {h}h{m}m',
       relDay: 'in {d}d',
+      snipResumeLabel: 'Safe resume',
+      snipResumeText: 'Continue: resume from where you left off; do not start unrelated new work.',
     };
 
     const ZH = {
@@ -93,6 +96,8 @@ window.__ModuleLoader__.load({
       relHour: '{h}时后',
       relHourMin: '{h}时{m}分后',
       relDay: '{d}天后',
+      snipResumeLabel: '安全继续',
+      snipResumeText: '继续：从中断处继续，不要开始与目标无关的新工作。',
     };
 
     const PRESETS = [
@@ -185,6 +190,12 @@ window.__ModuleLoader__.load({
         ?.filter((e) => e && typeof e.id === 'string' && typeof e.sessionId === 'string') ?? [];
     }
 
+    /** The most recent custom prompt (the strip shows exactly two chips: builtin + this). */
+    function loadSnippets() {
+      return loadStored(STORE_SNIPPETS, (v) => Array.isArray(v))
+        ?.filter((x) => typeof x === 'string' && x.trim() !== '').slice(0, 1) ?? [];
+    }
+
     const S = {
       buttonWrap: { position: 'relative', display: 'inline-flex' },
       button: (open) => ({
@@ -247,6 +258,20 @@ window.__ModuleLoader__.load({
       summary: { flex: 1, minWidth: 0, color: 'var(--dsw-alias-label-secondary)', fontSize: 12 },
       error: { color: 'var(--dsw-alias-state-error-primary)' },
       done: { color: 'var(--dsw-alias-state-success-primary)' },
+      fieldRow: { display: 'flex', alignItems: 'center', gap: 8 },
+      fieldLabel: { flexShrink: 0, color: 'var(--dsw-alias-label-secondary)', fontSize: 12 },
+      snips: { display: 'flex', gap: 6, minWidth: 0, overflow: 'hidden' },
+      snipChip: (on, shrink) => ({
+        flex: `0 ${shrink ? 1 : 0} auto`, minWidth: shrink ? 0 : undefined, maxWidth: 140,
+        padding: '3px 10px', borderRadius: 999, cursor: 'pointer', fontSize: 12,
+        display: 'inline-flex', alignItems: 'center', gap: 4, overflow: 'hidden',
+        whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+        // Always filled: a pill with a surface reads as a clickable chip, not as caption text.
+        border: `1px solid ${on ? 'var(--dsw-alias-border-l2)' : 'var(--dsw-alias-border-l1)'}`,
+        background: on ? 'var(--dsw-alias-interactive-bg-active)' : 'var(--dsw-alias-bg-layer-1)',
+        color: on ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)',
+      }),
+      snipText: { minWidth: 0, flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       pendingList: {
         display: 'flex', flexDirection: 'column', gap: 4,
         borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: 8,
@@ -293,6 +318,12 @@ window.__ModuleLoader__.load({
       strokeWidth: 2.4, strokeLinecap: 'round', 'aria-hidden': 'true', focusable: 'false',
     }, h('path', { d: 'M6 6l12 12M18 6L6 18' }));
 
+    const boltIcon = () => h('svg', {
+      width: 10, height: 10, viewBox: '0 0 24 24', fill: 'currentColor', stroke: 'none',
+      'aria-hidden': 'true', focusable: 'false',
+      style: { flexShrink: 0 },
+    }, h('path', { d: 'M13 2L4.5 12.5H11L9.5 22 19 9.5h-6.5L13 2z' }));
+
     /** Placeholder shown while the Host schedule face is not mounted (feature disabled in the profile). */
     function InertControl(props) {
       const t = typeof props.t === 'function' ? props.t : fallbackT;
@@ -323,6 +354,7 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false);
       const [busyCancelId, setBusyCancelId] = useState(undefined);
       const [pending, setPending] = useState([]);
+      const [snippets, setSnippets] = useState(() => loadSnippets());
       const [message, setMessage] = useState(undefined);
       const [solidAccent, setSolidAccent] = useState(false);
       const buttonRef = useRef(null);
@@ -515,6 +547,12 @@ window.__ModuleLoader__.load({
         if (result && result.ok) {
           storeValue(STORE_PROMPT, text);
           storeValue(STORE_PRESET, choice);
+          // Custom prompts feed the snippet strip (only the latest one is kept); the default and the builtin stay out.
+          const builtinText = t('snipResumeText');
+          if (text !== t('promptDefault') && text !== builtinText) {
+            storeValue(STORE_SNIPPETS, [text]);
+            setSnippets([text]);
+          }
           const createdId = result.value && typeof result.value.id === 'string' ? result.value.id : undefined;
           if (createdId) {
             const registry = loadRegistry().filter((r) => r.id !== createdId);
@@ -598,20 +636,43 @@ window.__ModuleLoader__.load({
             h('label', { style: S.field }, t('time'),
               h('input', { type: 'time', value: time, onChange: (event) => setTime(event.target.value), style: S.input })))
           : null,
-        h('label', { style: S.field }, t('promptLabel'),
-          h('input', {
-            type: 'text',
-            value: prompt,
-            placeholder: t('promptPlaceholder'),
-            onChange: (event) => setPrompt(event.target.value),
-            onKeyDown: (event) => {
-              if (event.key === 'Enter' && !(event.nativeEvent && event.nativeEvent.isComposing)) {
-                event.preventDefault();
-                submit();
-              }
-            },
-            style: S.input,
-          })),
+        h('div', { style: S.fieldRow },
+          h('label', { htmlFor: 'dsh-send-later-prompt', style: S.fieldLabel }, t('promptLabel')),
+          h('div', { style: S.snips },
+            h('button', {
+              key: 'snip-builtin',
+              type: 'button',
+              title: t('snipResumeText'),
+              onClick: () => {
+                setPrompt(t('snipResumeText'));
+                setMessage(undefined);
+              },
+              style: S.snipChip(prompt.trim() === t('snipResumeText')),
+            }, boltIcon(), t('snipResumeLabel')),
+            snippets.slice(0, 1).map((x) => h('button', {
+              key: x,
+              type: 'button',
+              title: x,
+              onClick: () => {
+                setPrompt(x);
+                setMessage(undefined);
+              },
+              style: S.snipChip(prompt.trim() === x, true),
+            }, boltIcon(), h('span', { style: S.snipText }, x))))),
+        h('input', {
+          id: 'dsh-send-later-prompt',
+          type: 'text',
+          value: prompt,
+          placeholder: t('promptPlaceholder'),
+          onChange: (event) => setPrompt(event.target.value),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter' && !(event.nativeEvent && event.nativeEvent.isComposing)) {
+              event.preventDefault();
+              submit();
+            }
+          },
+          style: S.input,
+        }),
         pending.length > 0 ? h('div', { style: S.pendingList },
           h('div', { style: S.pendingLabel }, `${t('pendingTitle')} · ${pending.length}`),
           pending.map((item) => {

@@ -270,6 +270,39 @@ const injected = slot.inject('session-test-1');
   await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   win.localStorage.clear();
 
+  // 7b. Snippet strip: exactly two chips (builtin + latest custom), no horizontal scrolling.
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  const snipChip = qa('button', dialog).find((b) => b.textContent.trim() === '安全继续');
+  check('builtin snippet chip renders in the strip', () => assert.ok(snipChip));
+  check('the strip renders exactly two chips', () => assert.equal(
+    qa('button svg[fill="currentColor"]', dialog).length, 2));
+  await act(async () => { snipChip.click(); });
+  check('builtin snippet fills the prompt input', () => assert.equal(
+    dialog.querySelector('input[type="text"]').value,
+    '继续：从中断处继续，不要开始与目标无关的新工作。'));
+  await act(async () => { setValue(dialog.querySelector('input[type="text"]'), '查一下行情再继续'); });
+  await act(async () => { findButton(dialog, '排程').click(); });
+  check('custom prompt is recorded as the latest snippet', () => assert.deepEqual(storeGet('dsh-send-later:v1:snippets'), ['查一下行情再继续']));
+  await act(async () => { await sleep(1700); });
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  await act(async () => { setValue(dialog.querySelector('input[type="text"]'), '自定义乙'); });
+  await act(async () => { findButton(dialog, '排程').click(); });
+  check('a newer custom prompt replaces the snippet', () => assert.deepEqual(storeGet('dsh-send-later:v1:snippets'), ['自定义乙']));
+  check('the strip still shows exactly two chips', () => assert.equal(
+    qa('button svg[fill="currentColor"]', dialog).length, 2));
+  await act(async () => { await sleep(1700); });
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  await act(async () => { setValue(dialog.querySelector('input[type="text"]'), '继续'); });
+  await act(async () => { findButton(dialog, '排程').click(); });
+  check('the bare default prompt is not recorded as a snippet', () => {
+    assert.deepEqual(storeGet('dsh-send-later:v1:snippets'), ['自定义乙']);
+  });
+  await act(async () => { await sleep(1700); });
+  win.localStorage.clear();
+
   // 8. Host failure keeps the panel open for a retry.
   next = async (request) => { calls.push(request); return { ok: false, error: { message: 'boom' } }; };
   await act(async () => { button.click(); });

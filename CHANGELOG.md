@@ -12,6 +12,7 @@ First real release on npm (the name was reserved by a `0.0.1` placeholder).
 - Fix: viewport resize no longer closes the panel — on phones the soft keyboard fired a resize when the message field gained focus, which dismissed the card mid-edit; the panel repositions instead.
 - Pending sends list their send time as a compact relative label ("10分钟后", fixed-width column, the absolute time on hover).
 - Fix: scheduling failed with "cannot get property 'remote.schedule' without inject" — the face is now taken from the inject scope instead of the plugin context.
+- Snippet strip beside the message-field label: a fixed "safe resume" chip (bounded continuation) plus the most recent custom prompt — two chips, no horizontal scrolling, long labels truncate in place with the full text on hover. Custom prompts are recorded locally on successful scheduling; the bare default is not recorded.
 - Compact panel: the title row carries a close button, the five presets fit one row in a segmented control, the send-time summary moved into the action row, and spacing tightened throughout.
 - Submit button and count badge follow a theme-safe color scheme: solid brand blue under the official theme, tonal accent under dsh-skins themes (detected at runtime from the token sheet), with readable text guaranteed on every theme.
 - If the Automation tasks feature is disabled in the profile, the clock button renders greyed out with an explanatory tooltip instead of disappearing; it upgrades to the full control as soon as the schedule service is available.
