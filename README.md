@@ -38,18 +38,6 @@
 
 npm 包 [dsh-send-later](https://www.npmjs.com/package/dsh-send-later) 与本仓库同步发布；`0.0.x` 为占位版本，请使用 0.2.0 及以上。
 
-<details>
-<summary>从源码安装（面向开发者）</summary>
-
-```bash
-git clone https://github.com/iasiv5/dsh-send-later.git
-cd dsh-send-later && npm install
-```
-
-然后在 DSH 会话里使用 `plugin_manager` 工具的 `install_bundle` 动作安装，`target` 填仓库目录的绝对路径，安装完成后刷新页面。
-
-</details>
-
 ## 🚀 使用
 
 1. 点击发送按钮左侧的时钟按钮，打开延时发送面板；
