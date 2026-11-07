@@ -24,4 +24,4 @@ DSH 插件：在输入框旁设定延时或指定时间，向当前会话发送�
 
 ## 许可
 
-尚未指定许可证。
+MIT License，见 [LICENSE](LICENSE)。
