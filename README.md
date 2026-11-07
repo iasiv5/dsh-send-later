@@ -52,9 +52,9 @@ npm 包 [dsh-send-later](https://www.npmjs.com/package/dsh-send-later) 与本仓
 
 排程成功后，任务以「延时发送：」为前缀进入 DSH **官方自动化任务**（`schedule`），而不是插件自建的私有队列：DSH 重启不丢，官方页可随时查看、暂停或删除；面板下方的待发送列表与官方页看到的是同一条任务，换设备登录后，其他设备排的任务也会按标题前缀被本会话面板收养。
 
-<p align="center"><img src="https://raw.githubusercontent.com/iasiv5/dsh-send-later/main/docs/images/schedule-task.png" alt="会话内：延时发送面板排程一条任务" width="593"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/iasiv5/dsh-send-later/main/docs/images/schedule-task.webp" alt="会话内：延时发送面板排程一条任务" width="634"></p>
 
-<p align="center"><img src="https://raw.githubusercontent.com/iasiv5/dsh-send-later/main/docs/images/automation-task.png" alt="官方「自动化任务」页：同一条任务可查看、暂停或删除" width="730"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/iasiv5/dsh-send-later/main/docs/images/automation-task.webp" alt="官方「自动化任务」页：同一条任务可查看、暂停或删除" width="730"></p>
 
 ## ⚠️ 已知限制
 
