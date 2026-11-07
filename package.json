@@ -1,18 +1,72 @@
 {
-  "name": "@local/dsh-send-later",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Schedule a delayed message, such as Continue, into the current session from the composer.",
+  "name": "dsh-send-later",
+  "version": "0.2.0",
+  "description": "DSH composer plugin that schedules a delayed message (e.g. Continue) into the current session",
+  "icon": "./icon.svg",
   "type": "module",
+  "main": "./index.js",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
   },
-  "files": ["index.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg"],
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/run.cjs",
+    "security:check": "node scripts/check-public-package.mjs",
+    "prepublishOnly": "npm test && node --check client.js && node --check index.js && npm run security:check"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iasiv5/dsh-send-later.git"
+  },
+  "bugs": {
+    "url": "https://github.com/iasiv5/dsh-send-later/issues"
+  },
+  "homepage": "https://github.com/iasiv5/dsh-send-later#readme",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "composer",
+    "schedule",
+    "delayed-send"
+  ],
+  "author": "iasi",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "engines": {
+      "dsh": ">=0.2.2-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,

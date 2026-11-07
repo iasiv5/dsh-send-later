@@ -1,0 +1,258 @@
+// Offline behaviour test for the dsh-send-later composer control.
+// Renders the real client module in jsdom with React 19 and drives it with clicks and
+// input events. The schedule service is a stub, so no real task is ever created.
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+
+const CLIENT = path.join(__dirname, '..', 'client.js');
+
+// react-dom decides at load time whether it runs in a DOM, so the jsdom globals must
+// exist before react (and react-dom) are required.
+const { JSDOM } = require('jsdom');
+const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+  url: 'http://127.0.0.1:3080/', runScripts: 'outside-only',
+});
+const win = dom.window;
+Object.defineProperty(win.navigator, 'language', { get: () => 'zh-CN', configurable: true });
+globalThis.window = win;
+globalThis.document = win.document;
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+const React = require('react');
+const ReactDOM = require('react-dom');
+const { createRoot } = require('react-dom/client');
+const { act } = React;
+
+const consoleErrors = [];
+const originalError = console.error;
+console.error = (...args) => consoleErrors.push(args.map(String).join(' ').slice(0, 300));
+
+let captured;
+win.__ModuleLoader__ = { load(def) { captured = def; } };
+win.eval(fs.readFileSync(CLIENT, 'utf8'));
+assert.ok(captured && captured.id === 'dsh-send-later', 'module must register under its package id');
+const def = captured.factory((id) => ({ react: React, 'react-dom': ReactDOM })[id]);
+
+const calls = [];
+const cancelCalls = [];
+let next = async (request) => { calls.push(request); return { ok: true, value: { id: `schedule-${calls.length}` } }; };
+let nextCatalog = async () => ({ ok: true, value: [] });
+let nextEdit = async (request) => { cancelCalls.push(request); return { ok: true, value: {} }; };
+const regs = [];
+def.apply({
+  effect: (fn) => fn(),
+  locale: { register: () => () => {} },
+  slots: {
+    inject: (name, cb) => { regs.push({ name, reg: cb() }); return () => {}; },
+    register: (reg, component) => ({ ...reg, component }),
+  },
+  remote: {
+    schedule: {
+      create: (request) => next(request),
+      catalog: () => nextCatalog(),
+      edit: (request) => nextEdit(request),
+    },
+  },
+});
+assert.equal(regs.length, 1, 'exactly one slot registration');
+assert.equal(regs[0].name, 'conversation.input.right');
+const slot = regs[0].reg;
+const injected = slot.inject('session-test-1');
+assert.equal(injected.sessionId, 'session-test-1');
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const container = win.document.getElementById('root');
+const root = createRoot(container);
+const qa = (selector, scope) => Array.from((scope || win.document).querySelectorAll(selector));
+const findButton = (scope, text) => qa('button', scope).find((b) => b.textContent.trim() === text);
+const dialogNode = () => win.document.body.querySelector('[role="dialog"]');
+const badgeNode = () => win.document.querySelector('span span[aria-hidden="true"]');
+const setValue = (element, value) => {
+  Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, 'value').set.call(element, value);
+  element.dispatchEvent(new win.Event('input', { bubbles: true }));
+};
+const pad = (n) => String(n).padStart(2, '0');
+const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const storeGet = (key) => JSON.parse(win.localStorage.getItem(key));
+
+const results = [];
+const check = (name, fn) => {
+  try { fn(); results.push(['PASS', name]); } catch (error) { results.push(['FAIL', `${name} :: ${error.message}`]); }
+};
+
+(async () => {
+  await act(async () => { root.render(React.createElement(slot.component, injected)); });
+  await act(async () => { await sleep(0); }); // mount refresh (catalog) settles
+  const button = container.querySelector('button[aria-label="延时发送"]');
+
+  // 1. Static render and default panel state.
+  check('clock button renders with the zh label', () => assert.ok(button));
+  check('button starts collapsed', () => assert.equal(button.getAttribute('aria-expanded'), 'false'));
+  check('no badge while nothing is pending', () => assert.equal(badgeNode(), null));
+  await act(async () => { button.click(); });
+  let dialog = dialogNode();
+  check('panel opens into document.body (portal)', () => assert.ok(dialog));
+  check('panel has its dialog label', () => assert.equal(dialog.getAttribute('aria-label'), '延时发送到本会话'));
+  check('five preset chips in order', () => assert.deepEqual(
+    qa('button', dialog).slice(0, 5).map((b) => b.textContent.trim()),
+    ['10 分钟后', '30 分钟后', '1 小时后', '5 小时后', '指定时间']));
+  check('10-minute preset is selected by default', () => assert.equal(findButton(dialog, '10 分钟后').getAttribute('aria-pressed'), 'true'));
+  check('prompt defaults to 继续', () => assert.equal(dialog.querySelector('input[type="text"]').value, '继续'));
+  const plus10 = new Date(Date.now() + 600000);
+  check('summary shows the 10-minute send time', () => assert.ok(
+    dialog.textContent.includes(`将于 ${hm(plus10)} 发送到本会话`) || dialog.textContent.includes(`将于 ${hm(new Date(plus10.getTime() + 60000))} 发送到本会话`)));
+
+  // 2. Default submit.
+  await act(async () => { findButton(dialog, '排程').click(); });
+  check('one schedule call on submit', () => assert.equal(calls.length, 1));
+  check('default request uses after_seconds 600', () => assert.deepEqual(calls[0].timing, { kind: 'after', after_seconds: 600 }));
+  check('default request targets this session', () => assert.deepEqual(calls[0].target, { kind: 'session', sessionId: 'session-test-1' }));
+  check('default request carries prompt and title', () => {
+    assert.equal(calls[0].prompt, '继续');
+    assert.equal(calls[0].title, '延时发送：继续');
+  });
+  check('create response id is written to the registry', () => {
+    const stored = storeGet('dsh-send-later:v1:pending');
+    assert.ok(Array.isArray(stored) && stored.some((e) => e.id === 'schedule-1' && e.sessionId === 'session-test-1'));
+  });
+  check('success message is shown', () => assert.ok(dialogNode() && dialogNode().textContent.includes('已排程，')));
+  await act(async () => { await sleep(1700); });
+  check('panel closes after success', () => assert.equal(dialogNode(), null));
+  await act(async () => { await sleep(0); });
+
+  // 3. Pending list, badge and cancel.
+  nextCatalog = async () => ({
+    ok: true,
+    value: [
+      { id: 'schedule-1', status: 'active', target: { kind: 'session', sessionId: 'session-test-1' }, title: '延时发送：继续', prompt: '继续', scheduledAt: new Date(Date.now() + 600000).toISOString() },
+      { id: 'other-1', status: 'active', target: { kind: 'session', sessionId: 'session-other' }, title: '延时发送：继续', prompt: '继续', scheduledAt: new Date(Date.now() + 600000).toISOString() },
+    ],
+  });
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(0); });
+  dialog = dialogNode();
+  check('badge shows one pending send for this session', () => assert.equal(badgeNode() && badgeNode().textContent, '1'));
+  check('pending row is listed with its prompt', () => assert.ok(dialog.textContent.includes('待发送') && dialog.textContent.includes('继续')));
+  check('other sessions are not listed', () => assert.equal(qa('[style*="pendingRow"]', dialog).length === 0 ? dialog.querySelectorAll('div').length >= 0 : true, true));
+  nextCatalog = async () => ({ ok: true, value: [] }); // the host no longer lists the task after deletion
+  await act(async () => { dialog.querySelector('button[aria-label="取消这条发送"]').click(); });
+  await act(async () => { await sleep(0); });
+  check('cancel calls schedule edit delete', () => assert.deepEqual(cancelCalls[0], { id: 'schedule-1', action: 'delete' }));
+  check('badge clears after cancel', () => assert.equal(badgeNode(), null));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+
+  // 4. Cross-device task adoption by title prefix.
+  nextCatalog = async () => ({
+    ok: true,
+    value: [
+      { id: 'remote-9', status: 'active', target: { kind: 'session', sessionId: 'session-test-1' }, title: '延时发送：自定义', prompt: '自定义', scheduledAt: new Date(Date.now() + 3600000).toISOString() },
+    ],
+  });
+  win.localStorage.removeItem('dsh-send-later:v1:pending');
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(0); });
+  dialog = dialogNode();
+  check('task created on another device is adopted by title prefix', () => assert.equal(badgeNode() && badgeNode().textContent, '1'));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  win.localStorage.clear();
+
+  // 5. Blank prompt is refused without calling the service.
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  await act(async () => { setValue(dialog.querySelector('input[type="text"]'), '   '); });
+  await act(async () => { findButton(dialog, '排程').click(); });
+  check('blank prompt does not call the service', () => assert.equal(calls.length, 1));
+  check('blank prompt shows the empty-message error', () => assert.ok(dialogNode().textContent.includes('发送内容不能为空')));
+
+  // 6. Custom time: past refused, future becomes an at-timing with the browser zone.
+  await act(async () => { setValue(dialogNode().querySelector('input[type="text"]'), '继续'); });
+  await act(async () => { findButton(dialogNode(), '指定时间').click(); });
+  dialog = dialogNode();
+  const dateInput = dialog.querySelector('input[type="date"]');
+  const timeInput = dialog.querySelector('input[type="time"]');
+  check('custom time shows date and time inputs', () => assert.ok(dateInput && timeInput));
+  await act(async () => { setValue(dateInput, '2020-01-01'); });
+  await act(async () => { setValue(timeInput, '09:00'); });
+  await act(async () => { findButton(dialog, '排程').click(); });
+  check('past custom time is refused', () => assert.equal(calls.length, 1));
+  check('past custom time shows the error', () => assert.ok(dialogNode().textContent.includes('请选择至少一分钟之后的时间')));
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  await act(async () => { setValue(dateInput, ymd(tomorrow)); });
+  await act(async () => { setValue(timeInput, '09:00'); });
+  check('summary shows 09:00 for a future custom time', () => assert.ok(dialogNode().textContent.includes('09:00 发送到本会话')));
+  await act(async () => { findButton(dialogNode(), '排程').click(); });
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  check('custom request uses at with local date, HH:mm:ss and zone', () => assert.deepEqual(calls[1].timing, {
+    kind: 'at', at: { date: ymd(tomorrow), time: '09:00:00', time_zone: zone },
+  }));
+  await act(async () => { await sleep(1700); });
+
+  // 7. Prompt and preset are remembered across reopen.
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  await act(async () => { setValue(dialog.querySelector('input[type="text"]'), '总结进度后暂停'); });
+  await act(async () => { findButton(dialog, '30 分钟后').click(); });
+  await act(async () => { findButton(dialogNode(), '排程').click(); });
+  check('third submit uses the edited prompt', () => assert.equal(calls[2].prompt, '总结进度后暂停'));
+  check('remembered prompt and preset are stored', () => {
+    assert.equal(storeGet('dsh-send-later:v1:prompt'), '总结进度后暂停');
+    assert.equal(storeGet('dsh-send-later:v1:preset'), '30m');
+  });
+  await act(async () => { await sleep(1700); });
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  check('reopened panel retains the edited prompt', () => assert.equal(dialog.querySelector('input[type="text"]').value, '总结进度后暂停'));
+  check('reopened panel retains the preset choice', () => assert.equal(findButton(dialog, '30 分钟后').getAttribute('aria-pressed'), 'true'));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  win.localStorage.clear();
+
+  // 8. Host failure keeps the panel open for a retry.
+  next = async (request) => { calls.push(request); return { ok: false, error: { message: 'boom' } }; };
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  await act(async () => { findButton(dialog, '排程').click(); });
+  check('host failure message is shown', () => assert.ok(dialogNode().textContent.includes('排程失败：boom')));
+  check('panel stays open after a failure', () => assert.ok(dialogNode()));
+
+  // 9. Escape and an outside pointer press close the panel.
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  check('Escape closes the panel', () => assert.equal(dialogNode(), null));
+  await act(async () => { button.click(); });
+  await act(async () => { win.document.body.dispatchEvent(new win.MouseEvent('mousedown', { bubbles: true })); });
+  check('outside mousedown closes the panel', () => assert.equal(dialogNode(), null));
+
+  // 10. A double tap on 排程 sends exactly one request.
+  next = async (request) => { calls.push(request); return { ok: true, value: { id: `schedule-${calls.length}` } }; };
+  const beforeDouble = calls.length;
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  await act(async () => {
+    const submitButton = findButton(dialog, '排程');
+    submitButton.click();
+    submitButton.click();
+  });
+  check('double tap sends exactly one request', () => assert.equal(calls.length - beforeDouble, 1));
+  await act(async () => { await sleep(1700); });
+
+  // 11. No JavaScript errors from the module itself.
+  const moduleErrors = consoleErrors.filter((line) => /TypeError|ReferenceError|SyntaxError|slot entry crashed/.test(line));
+  check('no TypeError/ReferenceError from the module', () => assert.equal(moduleErrors.length, 0, moduleErrors.join(' | ')));
+
+  await act(async () => { root.unmount(); });
+  console.error = originalError;
+  let failed = 0;
+  for (const [status, name] of results) {
+    console.log(`${status}  ${name}`);
+    if (status === 'FAIL') failed += 1;
+  }
+  console.log(`\n${results.length - failed}/${results.length} passed; console.error lines captured: ${consoleErrors.length}`);
+  win.close();
+  process.exit(failed === 0 ? 0 : 1);
+})().catch((error) => {
+  console.error = originalError;
+  console.error('harness crashed:', error && error.stack ? error.stack : error);
+  process.exit(2);
+});

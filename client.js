@@ -1,11 +1,13 @@
 /*
- * Client half of @local/dsh-send-later.
+ * Client half of @iasiv5/dsh-send-later.
  * Adds a clock button before the composer's submit action. The popover asks for a delay
  * or a local time plus a message, then asks the Host Schedule service to deliver that
- * message to the current session as a one-shot task. No timer or storage lives here.
+ * message to the current session as a one-shot task. Pending sends for this session are
+ * listed in the panel and can be cancelled; the button shows a count badge. No timer or
+ * delivery logic lives here — the Host Schedule service owns persistence and delivery.
  */
 window.__ModuleLoader__.load({
-  id: '@local/dsh-send-later',
+  id: 'dsh-send-later',
   factory(require) {
     const React = require('react');
     const ReactDOM = require('react-dom');
@@ -13,6 +15,9 @@ window.__ModuleLoader__.load({
     const { useEffect, useRef, useState } = React;
 
     const NS = 'send-later';
+    const STORE_PENDING = 'dsh-send-later:v1:pending';
+    const STORE_PROMPT = 'dsh-send-later:v1:prompt';
+    const STORE_PRESET = 'dsh-send-later:v1:preset';
 
     const EN = {
       button: 'Send later',
@@ -29,9 +34,13 @@ window.__ModuleLoader__.load({
       promptPlaceholder: 'Message to send',
       summaryPrefix: 'Sends at ',
       summarySuffix: ' to this session',
+      pendingTitle: 'Pending sends',
       cancel: 'Cancel',
+      cancelTask: 'Cancel this send',
+      cancelFailed: 'Cancel failed: ',
       submit: 'Schedule',
       busy: 'Scheduling…',
+      cancelling: 'Cancelling…',
       donePrefix: 'Scheduled for ',
       doneSuffix: '',
       titlePrefix: 'Send later: ',
@@ -56,9 +65,13 @@ window.__ModuleLoader__.load({
       promptPlaceholder: '要发送的内容',
       summaryPrefix: '将于 ',
       summarySuffix: ' 发送到本会话',
+      pendingTitle: '待发送',
+      cancelTask: '取消这条发送',
+      cancelFailed: '取消失败：',
       cancel: '取消',
       submit: '排程',
       busy: '排程中…',
+      cancelling: '取消中…',
       donePrefix: '已排程，',
       doneSuffix: ' 发送',
       titlePrefix: '延时发送：',
@@ -82,6 +95,7 @@ window.__ModuleLoader__.load({
     const pad = (n) => String(n).padStart(2, '0');
     const dateValue = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     const timeValue = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const compactWhen = (d) => (d.getTime() - Date.now() > 86400000 ? `${dateValue(d).slice(5)} ${timeValue(d)}` : timeValue(d));
 
     function parseLocal(date, time) {
       const [year, month, day] = String(date).split('-').map(Number);
@@ -99,7 +113,31 @@ window.__ModuleLoader__.load({
       }
     }
 
+    function loadStored(key, validate) {
+      try {
+        const raw = window.localStorage.getItem(key);
+        if (raw === null) return undefined;
+        const value = JSON.parse(raw);
+        return validate(value) ? value : undefined;
+      } catch (_error) {
+        return undefined;
+      }
+    }
+
+    function storeValue(key, value) {
+      try {
+        window.localStorage.setItem(key, JSON.stringify(value));
+      } catch (_error) { /* storage unavailable; reminders still work without memory */ }
+    }
+
+    /** Pending sends this plugin created, keyed by schedule task id. Best-effort memory. */
+    function loadRegistry() {
+      return loadStored(STORE_PENDING, (v) => Array.isArray(v))
+        ?.filter((e) => e && typeof e.id === 'string' && typeof e.sessionId === 'string') ?? [];
+    }
+
     const S = {
+      buttonWrap: { position: 'relative', display: 'inline-flex' },
       button: (open) => ({
         width: 28, height: 28, padding: 0, borderRadius: 8, cursor: 'pointer',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -107,16 +145,23 @@ window.__ModuleLoader__.load({
         background: open ? 'var(--dsw-alias-interactive-bg-active)' : 'transparent',
         color: open ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-label-secondary)',
       }),
+      badge: {
+        position: 'absolute', top: -5, right: -5, minWidth: 14, height: 14, padding: '0 4px',
+        borderRadius: 7, background: 'var(--dsw-alias-brand-primary)',
+        color: 'var(--dsw-alias-brand-primary-invert)', fontSize: 10, fontWeight: 600,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none',
+      },
       panel: (anchor) => ({
-        position: 'fixed', left: anchor.left, bottom: anchor.bottom, zIndex: 1000,
-        width: anchor.width, maxWidth: 'calc(100vw - 16px)', maxHeight: anchor.maxHeight,
-        overflowY: 'auto', boxSizing: 'border-box', padding: 12,
+        position: 'fixed', ...(anchor.narrow
+          ? { left: 8, right: 8, bottom: 8, maxHeight: '70vh' }
+          : { left: anchor.left, bottom: anchor.bottom, width: anchor.width, maxHeight: anchor.maxHeight }),
+        boxSizing: 'border-box', overflowY: 'auto', padding: 12,
         display: 'flex', flexDirection: 'column', gap: 10, borderRadius: 12,
         border: '1px solid var(--dsw-alias-border-l1)',
         background: 'var(--dsw-alias-bg-overlay)',
         color: 'var(--dsw-alias-label-primary)',
         boxShadow: '0 8px 24px rgba(0, 0, 0, 0.18)',
-        fontSize: 13, lineHeight: 1.4,
+        fontSize: 13, lineHeight: 1.4, zIndex: 1000,
       }),
       heading: { fontWeight: 600 },
       chips: { display: 'flex', flexWrap: 'wrap', gap: 6 },
@@ -140,6 +185,21 @@ window.__ModuleLoader__.load({
       summary: { color: 'var(--dsw-alias-label-secondary)' },
       error: { color: 'var(--dsw-alias-state-error-primary)' },
       done: { color: 'var(--dsw-alias-state-success-primary)' },
+      pendingList: { display: 'flex', flexDirection: 'column', gap: 4 },
+      pendingLabel: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12 },
+      pendingRow: {
+        display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 8,
+        border: '1px solid var(--dsw-alias-border-l1)',
+        background: 'var(--dsw-alias-bg-layer-1)',
+      },
+      pendingWhen: { flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
+      pendingText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      pendingCancel: {
+        flexShrink: 0, width: 22, height: 22, padding: 0, borderRadius: 6, cursor: 'pointer',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12,
+        border: '1px solid var(--dsw-alias-border-l2)',
+        background: 'transparent', color: 'var(--dsw-alias-label-secondary)',
+      },
       footer: { display: 'flex', justifyContent: 'flex-end', gap: 8 },
       secondary: {
         padding: '6px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 13,
@@ -160,29 +220,111 @@ window.__ModuleLoader__.load({
       'aria-hidden': 'true', focusable: 'false',
     }, h('circle', { cx: 12, cy: 12, r: 9 }), h('path', { d: 'M12 7v5l3 2' }));
 
+    const crossIcon = () => h('svg', {
+      width: 10, height: 10, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+      strokeWidth: 2.4, strokeLinecap: 'round', 'aria-hidden': 'true', focusable: 'false',
+    }, h('path', { d: 'M6 6l12 12M18 6L6 18' }));
+
     function SendLater(props) {
       const t = typeof props.t === 'function' ? props.t : fallbackT;
       const [open, setOpen] = useState(false);
-      const [anchor, setAnchor] = useState({ left: 8, width: 300, bottom: 72, maxHeight: 480 });
-      const [choice, setChoice] = useState('10m');
-      const [prompt, setPrompt] = useState(() => t('promptDefault'));
+      const [anchor, setAnchor] = useState({ left: 8, width: 300, bottom: 72, maxHeight: 480, narrow: false });
+      const [choice, setChoice] = useState(() => {
+        const stored = loadStored(STORE_PRESET, (v) => PRESETS.some((p) => p.id === v));
+        return stored ?? '10m';
+      });
+      const [prompt, setPrompt] = useState(() => {
+        const stored = loadStored(STORE_PROMPT, (v) => typeof v === 'string' && v.trim() !== '');
+        return stored ?? t('promptDefault');
+      });
       const [date, setDate] = useState(() => dateValue(new Date(Date.now() + 3600000)));
       const [time, setTime] = useState(() => timeValue(new Date(Date.now() + 3600000)));
       const [busy, setBusy] = useState(false);
+      const [busyCancelId, setBusyCancelId] = useState(undefined);
+      const [pending, setPending] = useState([]);
       const [message, setMessage] = useState(undefined);
       const buttonRef = useRef(null);
       const panelRef = useRef(null);
       const aliveRef = useRef(true);
       const timerRef = useRef(undefined);
       const busyRef = useRef(false);
+      const pendingRef = useRef([]);
+      const propsRef = useRef(props);
+      propsRef.current = props;
+      pendingRef.current = pending;
 
       useEffect(() => () => {
         aliveRef.current = false;
         if (timerRef.current !== undefined) clearTimeout(timerRef.current);
       }, []);
 
+      const sessionId = typeof props.sessionId === 'string' ? props.sessionId : '';
+      const canList = typeof props.listCatalog === 'function';
+
+      const refreshPending = async () => {
+        const sid = propsRef.current.sessionId;
+        if (!canList || typeof sid !== 'string' || sid === '') return;
+        let entries;
+        try {
+          const result = await propsRef.current.listCatalog();
+          entries = result && result.ok ? result.value : undefined;
+        } catch (_error) {
+          entries = undefined;
+        }
+        if (!aliveRef.current) return;
+        const prefix = t('titlePrefix');
+        const isOurs = (entry) => entry && entry.status === 'active'
+          && entry.target && entry.target.kind === 'session' && entry.target.sessionId === sid;
+        if (!Array.isArray(entries)) {
+          // Catalog unavailable: fall back to the local registry so the badge stays honest.
+          setPending(loadRegistry().filter((r) => r.sessionId === sid)
+            .map((r) => ({ id: r.id, at: r.at, prompt: typeof r.prompt === 'string' ? r.prompt : '' })));
+          return;
+        }
+        const byId = new Map(entries.map((entry) => [entry.id, entry]));
+        const live = [];
+        const seen = new Set();
+        for (const r of loadRegistry()) {
+          const entry = byId.get(r.id);
+          if (entry && isOurs(entry) && !seen.has(r.id)) {
+            live.push({ id: r.id, at: entry.scheduledAt || r.at, prompt: typeof entry.prompt === 'string' ? entry.prompt : r.prompt || '' });
+            seen.add(r.id);
+          }
+        }
+        // Adopt tasks created elsewhere (another browser/device) that carry our title marker.
+        for (const entry of entries) {
+          if (isOurs(entry) && !seen.has(entry.id)
+            && typeof entry.title === 'string' && entry.title.startsWith(prefix)) {
+            live.push({ id: entry.id, at: entry.scheduledAt, prompt: typeof entry.prompt === 'string' ? entry.prompt : '' });
+            seen.add(entry.id);
+          }
+        }
+        // Keep just-created entries the catalog does not know about yet (catalog can lag behind a create).
+        const now = Date.now();
+        for (const r of loadRegistry()) {
+          if (!seen.has(r.id) && r.sessionId === sid
+            && typeof r.ts === 'number' && now - r.ts < 300000) {
+            live.push({ id: r.id, at: r.at, prompt: typeof r.prompt === 'string' ? r.prompt : '' });
+            seen.add(r.id);
+          }
+        }
+        live.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+        storeValue(STORE_PENDING, live.map((x) => ({ id: x.id, sessionId: sid, at: x.at, prompt: x.prompt })));
+        setPending(live);
+      };
+
+      // Refresh on mount, when the session changes, and after any mutation; light interval while a send is pending.
+      useEffect(() => { refreshPending(); /* eslint-disable-line no-unused-vars */ }, [sessionId]);
+      useEffect(() => {
+        const id = window.setInterval(() => {
+          if (aliveRef.current && pendingRef.current.length > 0) refreshPending();
+        }, 60000);
+        return () => window.clearInterval(id);
+      }, []);
+
       useEffect(() => {
         if (!open) return undefined;
+        refreshPending();
         const onPointer = (event) => {
           if (panelRef.current && panelRef.current.contains(event.target)) return;
           if (buttonRef.current && buttonRef.current.contains(event.target)) return;
@@ -213,8 +355,9 @@ window.__ModuleLoader__.load({
           return;
         }
         const rect = buttonRef.current ? buttonRef.current.getBoundingClientRect() : undefined;
+        const narrow = window.innerWidth < 480;
         if (rect) {
-          // Keep the whole panel inside the viewport: on narrow phones the button sits well left of the edge.
+          // Keep the whole panel inside the viewport: on narrow phones render a bottom sheet.
           const width = Math.min(300, window.innerWidth - 16);
           const left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);
           setAnchor({
@@ -222,7 +365,10 @@ window.__ModuleLoader__.load({
             width,
             bottom: window.innerHeight - rect.top + 8,
             maxHeight: Math.max(200, rect.top - 16),
+            narrow,
           });
+        } else {
+          setAnchor((current) => ({ ...current, narrow }));
         }
         setMessage(undefined);
         setOpen(true);
@@ -235,7 +381,8 @@ window.__ModuleLoader__.load({
           setMessage({ kind: 'error', text: t('errEmpty') });
           return;
         }
-        if (typeof props.sessionId !== 'string' || props.sessionId === '' || typeof props.schedule !== 'function') {
+        const current = propsRef.current;
+        if (typeof current.sessionId !== 'string' || current.sessionId === '' || typeof current.schedule !== 'function') {
           setMessage({ kind: 'error', text: t('errNoSession') });
           return;
         }
@@ -259,11 +406,11 @@ window.__ModuleLoader__.load({
         setMessage(undefined);
         let result;
         try {
-          result = await props.schedule({
+          result = await current.schedule({
             title: (t('titlePrefix') + text).slice(0, 120),
             prompt: text,
             timing,
-            target: { kind: 'session', sessionId: props.sessionId },
+            target: { kind: 'session', sessionId: current.sessionId },
           });
         } catch (error) {
           result = { ok: false, error: { message: error instanceof Error ? error.message : String(error) } };
@@ -272,7 +419,16 @@ window.__ModuleLoader__.load({
         if (!aliveRef.current) return;
         setBusy(false);
         if (result && result.ok) {
-          setMessage({ kind: 'done', text: t('donePrefix') + timeValue(when) + t('doneSuffix') });
+          storeValue(STORE_PROMPT, text);
+          storeValue(STORE_PRESET, choice);
+          const createdId = result.value && typeof result.value.id === 'string' ? result.value.id : undefined;
+          if (createdId) {
+            const registry = loadRegistry().filter((r) => r.id !== createdId);
+            registry.push({ id: createdId, sessionId: current.sessionId, at: when.toISOString(), prompt: text, ts: Date.now() });
+            storeValue(STORE_PENDING, registry);
+          }
+          setMessage({ kind: 'done', text: t('donePrefix') + compactWhen(when) + t('doneSuffix') });
+          refreshPending();
           timerRef.current = setTimeout(() => {
             if (aliveRef.current) setOpen(false);
           }, 1600);
@@ -282,16 +438,39 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const button = h('button', {
-        type: 'button',
-        ref: buttonRef,
-        onClick: toggle,
-        'aria-label': t('button'),
-        title: t('button'),
-        'aria-haspopup': 'dialog',
-        'aria-expanded': open ? 'true' : 'false',
-        style: S.button(open),
-      }, clockIcon());
+      const cancelPending = async (id) => {
+        const current = propsRef.current;
+        if (busyCancelId !== undefined || typeof current.cancelTask !== 'function') return;
+        setBusyCancelId(id);
+        let result;
+        try {
+          result = await current.cancelTask(id);
+        } catch (error) {
+          result = { ok: false, error: { message: error instanceof Error ? error.message : String(error) } };
+        }
+        if (!aliveRef.current) return;
+        setBusyCancelId(undefined);
+        if (result && result.ok) {
+          storeValue(STORE_PENDING, loadRegistry().filter((r) => r.id !== id));
+          refreshPending();
+        } else {
+          const detail = (result && result.error && (result.error.message || result.error.code)) || '';
+          setMessage({ kind: 'error', text: t('cancelFailed') + detail });
+        }
+      };
+
+      const button = h('span', { style: S.buttonWrap },
+        h('button', {
+          type: 'button',
+          ref: buttonRef,
+          onClick: toggle,
+          'aria-label': t('button'),
+          title: t('button'),
+          'aria-haspopup': 'dialog',
+          'aria-expanded': open ? 'true' : 'false',
+          style: S.button(open),
+        }, clockIcon()),
+        pending.length > 0 ? h('span', { 'aria-hidden': 'true', style: S.badge }, pending.length > 9 ? '9+' : String(pending.length)) : null);
 
       const panelBody = h('div', {
         ref: panelRef,
@@ -331,7 +510,21 @@ window.__ModuleLoader__.load({
             },
             style: S.input,
           })),
-        previewAt ? h('div', { style: S.summary }, t('summaryPrefix') + timeValue(previewAt) + t('summarySuffix')) : null,
+        previewAt ? h('div', { style: S.summary }, t('summaryPrefix') + compactWhen(previewAt) + t('summarySuffix')) : null,
+        pending.length > 0 ? h('div', { style: S.pendingList },
+          h('div', { style: S.pendingLabel }, `${t('pendingTitle')} · ${pending.length}`),
+          pending.map((item) => h('div', { key: item.id, style: S.pendingRow },
+            h('span', { style: S.pendingWhen }, compactWhen(new Date(item.at))),
+            h('span', { style: S.pendingText, title: item.prompt }, item.prompt || item.id),
+            h('button', {
+              type: 'button',
+              'aria-label': t('cancelTask'),
+              title: t('cancelTask'),
+              disabled: busyCancelId !== undefined,
+              onClick: () => cancelPending(item.id),
+              style: S.pendingCancel,
+            }, busyCancelId === item.id ? t('cancelling').slice(0, 1) : crossIcon()))))
+          : null,
         message ? h('div', { role: 'status', style: message.kind === 'error' ? S.error : S.done }, message.text) : null,
         h('div', { style: S.footer },
           h('button', { type: 'button', onClick: () => setOpen(false), style: S.secondary }, t('cancel')),
@@ -354,6 +547,8 @@ window.__ModuleLoader__.load({
           inject: (sessionId) => ({
             sessionId,
             schedule: (request) => ctx.remote.schedule.create(request),
+            listCatalog: () => ctx.remote.schedule.catalog(),
+            cancelTask: (id) => ctx.remote.schedule.edit({ id, action: 'delete' }),
           }),
         }, SendLater));
       },
