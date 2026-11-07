@@ -11,8 +11,7 @@ First real release on npm (the name was reserved by a `0.0.1` placeholder).
 - Double-tapping Schedule now sends exactly one request.
 - Fix: viewport resize no longer closes the panel — on phones the soft keyboard fired a resize when the message field gained focus, which dismissed the card mid-edit; the panel repositions instead.
 - Pending sends list their send time as a compact relative label ("10分钟后", fixed-width column, the absolute time on hover).
-- Quota reset line: with dsh-quota-watch installed, the panel shows the GLM 5-hour window percent and expected reset time; the line hides itself when the data is unavailable.
-- Session indicator: the panel header shows the current session title, so parallel sessions do not get mixed up.
+- Quota-aware custom time: with dsh-quota-watch installed, picking a custom time pre-fills the date and time inputs to the GLM 5-hour reset instant plus two minutes of slack (falls back to one hour ahead without data). Nothing about the quota is displayed anywhere.
 - Keyboard-aware positioning: on phones the panel stays above the soft keyboard (visualViewport) instead of hiding behind it.
 - Fix: scheduling failed with "cannot get property 'remote.schedule' without inject" — the face is now taken from the inject scope instead of the plugin context.
 - Snippet strip beside the message-field label: a fixed "safe resume" chip (bounded continuation) plus the most recent custom prompt — two chips, no horizontal scrolling, long labels truncate in place with the full text on hover. Custom prompts are recorded locally on successful scheduling; the bare default is not recorded.

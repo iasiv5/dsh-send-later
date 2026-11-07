@@ -54,7 +54,6 @@ function makeCtx(scheduleFace) {
     },
     effect(fn) { const d = fn(); disposers.push(d); return d; },
     locale: { register: () => () => {} },
-    sessions: { list: { getSnapshot: () => ({ entries: [{ sessionId: 'session-test-1', title: '测试会话标题' }] }) } },
     inject(keys, cb) {
       // Hand the callback a scope exposing only the injected face, like the real Host does.
       if (scheduleFace) { cb({ remote: { schedule: ctx.remote.schedule } }); return () => {}; }
@@ -363,26 +362,35 @@ const injected = slot.inject('session-test-1');
   check('resize keeps the panel open (mobile keyboard regression)', () => assert.ok(dialogNode()));
   await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
 
-  // 13. Quota reset line (quota-watch snapshot) and the session indicator.
+  // 13. Custom-time default pre-fills from the GLM 5h reset (+2 min); nothing about quota is displayed.
   win.fetch = async () => ({ ok: true, json: async () => ({ providers: [
-    { key: 'glm', status: 'ready', plan: { windows: [{ key: '5h', percent: 39, resetsAt: new Date(Date.now() + 7200000).toISOString() }] } },
-    { key: 'copilot', status: 'ready' },
+    { key: "glm", status: "ready", plan: { windows: [{ key: "5h", percent: 39, resetsAt: new Date(Date.now() + 7200000).toISOString() }] } },
+    { key: "copilot", status: "ready" },
   ] }) });
   await act(async () => { button.click(); });
   dialog = dialogNode();
-  check('quota line shows the GLM 5h window and percent', () => {
-    const text = dialogNode().textContent;
-    assert.ok(text.includes('GLM 5h'), 'no GLM 5h label');
-    assert.ok(text.includes('39'), 'no percent');
+  check("no quota percent hint is displayed anywhere", () => assert.equal(
+    dialogNode().querySelector('span[title^="GLM 5h"]'), null));
+  const expected = new Date(Date.now() + 7200000 + 120000);
+  const hmMatches = (input, when) => [0, -60000, 60000].some((delta) => input === hm(new Date(when.getTime() + delta)));
+  await act(async () => { findButton(dialog, "指定").click(); });
+  check("custom inputs pre-fill to the reset time plus two minutes", () => {
+    assert.equal(dialog.querySelector('input[type="date"]').value, ymd(expected));
+    assert.ok(hmMatches(dialog.querySelector('input[type="time"]').value, expected),
+      `time was: ${dialog.querySelector('input[type="time"]').value}`);
   });
-  check('session indicator shows the current session title', () => assert.ok(dialogNode().textContent.includes('测试会话标题')));
-  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
-  win.fetch = async () => ({ ok: false });
-  await act(async () => { button.click(); });
-  check('quota line hides when the quota source is unavailable', () => assert.equal(dialogNode().textContent.includes('GLM 5h'), false));
-  check('session indicator still shows without quota', () => assert.ok(dialogNode().textContent.includes('测试会话标题')));
-  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   delete win.fetch;
+  await act(async () => { button.click(); });
+  dialog = dialogNode();
+  const fallback = new Date(Date.now() + 3600000);
+  await act(async () => { findButton(dialog, "指定").click(); });
+  check("without quota data the custom default stays one hour ahead", () => {
+    assert.equal(dialog.querySelector('input[type="date"]').value, ymd(fallback));
+    assert.ok(hmMatches(dialog.querySelector('input[type="time"]').value, fallback),
+      `time was: ${dialog.querySelector('input[type="time"]').value}`);
+  });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
 
   // 11. No JavaScript errors from the module itself.
   const moduleErrors = consoleErrors.filter((line) => /TypeError|ReferenceError|SyntaxError|slot entry crashed/.test(line));

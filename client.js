@@ -51,7 +51,6 @@ window.__ModuleLoader__.load({
       errNoSession: 'No session is available.',
       errFailed: 'Scheduling failed: ',
       errDisabled: 'Send later is unavailable: the Automation tasks feature is disabled.',
-      quotaLine: 'GLM 5h {p}% · resets ~{t} ({r})',
       relSoon: '<1m',
       relMin: 'in {m}m',
       relHour: 'in {h}h',
@@ -92,7 +91,6 @@ window.__ModuleLoader__.load({
       errNoSession: '当前没有可用的会话。',
       errFailed: '排程失败：',
       errDisabled: '延时发送不可用：自动化任务（排程）功能未启用。',
-      quotaLine: 'GLM 5h {p}% · 预计 {t} 恢复（{r}）',
       relSoon: '1分钟内',
       relMin: '{m}分钟后',
       relHour: '{h}时后',
@@ -246,8 +244,8 @@ window.__ModuleLoader__.load({
         boxShadow: '0 8px 24px rgba(0, 0, 0, 0.18)',
         fontSize: 13, lineHeight: 1.4, zIndex: 1000,
       }),
-      header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-      heading: { fontWeight: 600, fontSize: 13 },
+      header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+      heading: { fontWeight: 600, fontSize: 13, flexShrink: 0, display: 'inline-flex', alignItems: 'baseline', gap: 5 },
       closeBtn: {
         width: 22, height: 22, padding: 0, borderRadius: 6, cursor: 'pointer',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -293,8 +291,6 @@ window.__ModuleLoader__.load({
         color: on ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)',
       }),
       snipText: { minWidth: 0, flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-      sessionLine: { color: 'var(--dsw-alias-label-dimmed, var(--dsw-alias-label-secondary))', fontSize: 12, marginTop: -4 },
-      quotaLine: { color: 'var(--dsw-alias-label-dimmed, var(--dsw-alias-label-secondary))', fontSize: 12 },
       pendingList: {
         display: 'flex', flexDirection: 'column', gap: 4,
         borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: 8,
@@ -347,6 +343,8 @@ window.__ModuleLoader__.load({
       style: { flexShrink: 0 },
     }, h('path', { d: 'M13 2L4.5 12.5H11L9.5 22 19 9.5h-6.5L13 2z' }));
 
+    /** The dim percent hint after the panel title; the full detail rides on its hover title. */
+
     /** Placeholder shown while the Host schedule face is not mounted (feature disabled in the profile). */
     function InertControl(props) {
       const t = typeof props.t === 'function' ? props.t : fallbackT;
@@ -379,7 +377,6 @@ window.__ModuleLoader__.load({
       const [pending, setPending] = useState([]);
       const [snippets, setSnippets] = useState(() => loadSnippets());
       const [quota, setQuota] = useState(undefined);
-      const [sessionTitle, setSessionTitle] = useState('');
       const [message, setMessage] = useState(undefined);
       const [solidAccent, setSolidAccent] = useState(false);
       const buttonRef = useRef(null);
@@ -393,6 +390,8 @@ window.__ModuleLoader__.load({
       pendingRef.current = pending;
       const openRef = useRef(false);
       openRef.current = open;
+      const quotaRef = useRef(quota);
+      quotaRef.current = quota;
 
       useEffect(() => () => {
         aliveRef.current = false;
@@ -477,7 +476,6 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!open) return undefined;
         refreshPending();
-        if (typeof propsRef.current.sessionTitle === 'function') setSessionTitle(propsRef.current.sessionTitle() || '');
         if (typeof propsRef.current.fetchQuota === 'function') {
           propsRef.current.fetchQuota().then((q) => { if (aliveRef.current) setQuota(q && q.resetAt ? q : null); }).catch(() => {});
         }
@@ -642,12 +640,6 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const quotaText = quota && quota.resetAt
-        ? t('quotaLine')
-            .replace('{p}', quota.percent === undefined ? '?' : String(quota.percent))
-            .replace('{t}', timeValue(new Date(quota.resetAt)))
-            .replace('{r}', relativeWhen(new Date(quota.resetAt), t).label)
-        : '';
 
       const button = h('span', { style: S.buttonWrap },
         h('button', {
@@ -677,7 +669,6 @@ window.__ModuleLoader__.load({
             onClick: () => setOpen(false),
             style: S.closeBtn,
           }, crossIcon())),
-        sessionTitle ? h('div', { style: S.sessionLine }, sessionTitle) : null,
         h('div', { style: S.chips }, PRESETS.map((item) => h('button', {
           key: item.id,
           type: 'button',
@@ -685,6 +676,20 @@ window.__ModuleLoader__.load({
           onClick: () => {
             setChoice(item.id);
             setMessage(undefined);
+            if (item.id === 'custom') {
+              // Prefer the GLM 5h reset instant plus two minutes of slack as the default;
+              // fall back to one hour ahead when no fresh quota data exists.
+              const q = quotaRef.current;
+              let when;
+              if (q && q.resetAt) {
+                const candidate = new Date(q.resetAt + 120000);
+                const lead = candidate.getTime() - Date.now();
+                if (lead >= 120000 && lead <= 7 * 3600000) when = candidate;
+              }
+              if (when === undefined) when = new Date(Date.now() + 3600000);
+              setDate(dateValue(when));
+              setTime(timeValue(when));
+            }
           },
           style: S.chip(item.id === choice),
         }, t(item.label)))),
@@ -718,7 +723,6 @@ window.__ModuleLoader__.load({
               },
               style: S.snipChip(prompt.trim() === x, true),
             }, boltIcon(), h('span', { style: S.snipText }, x))))),
-        quota && quota.resetAt ? h('div', { style: S.quotaLine }, quotaText) : null,
         h('input', {
           id: 'dsh-send-later-prompt',
           type: 'text',
@@ -761,7 +765,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['locale', 'slots', 'remote', 'sessions'],
+      inject: ['locale', 'slots', 'remote'],
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, 'en', EN), 'send-later: en dictionary');
         ctx.effect(() => ctx.locale.register(NS, 'zh', ZH), 'send-later: zh dictionary');
@@ -790,17 +794,6 @@ window.__ModuleLoader__.load({
                 schedule: (request) => api.create(request),
                 listCatalog: () => api.catalog(),
                 cancelTask: (id) => api.edit({ id, action: 'delete' }),
-                sessionTitle: () => {
-                  try {
-                    const snap = ctx.sessions.list.getSnapshot();
-                    const entries = snap && Array.isArray(snap.entries) ? snap.entries
-                      : (Array.isArray(snap) ? snap : (snap && Array.isArray(snap.sessions) ? snap.sessions : []));
-                    const hit = entries.find((e) => e && e.sessionId === sessionId);
-                    return hit && typeof hit.title === 'string' ? hit.title : '';
-                  } catch (_error) {
-                    return '';
-                  }
-                },
                 fetchQuota: () => fetchGlm5hQuota(),
               }),
             }, SendLater));
