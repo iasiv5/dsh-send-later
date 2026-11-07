@@ -32,7 +32,7 @@
 2. 输入包名 `dsh-send-later`（或 GitHub 仓库地址 `iasiv5/dsh-send-later`）；
 3. 选择安装源，点击「安装」，完成后刷新页面即可生效。
 
-<p align="center"><img src="https://raw.githubusercontent.com/iasiv5/dsh-send-later/main/docs/images/install-dialog.webp" alt="在 dsh-m「添加插件」对话框中输入包名安装" width="588"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/iasiv5/dsh-send-later/main/docs/images/install-dialog.webp" alt="在 dsh-m「添加插件」对话框中输入包名安装" width="634"></p>
 
 也可以在 dsh-m 插件市场中搜索关键词「延时发送」或 `send-later` 直接安装。
 
