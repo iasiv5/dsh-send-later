@@ -48,6 +48,7 @@ window.__ModuleLoader__.load({
       errPast: 'Choose a time at least one minute ahead.',
       errNoSession: 'No session is available.',
       errFailed: 'Scheduling failed: ',
+      errDisabled: 'Send later is unavailable: the Automation tasks feature is disabled.',
     };
 
     const ZH = {
@@ -79,6 +80,7 @@ window.__ModuleLoader__.load({
       errPast: '请选择至少一分钟之后的时间。',
       errNoSession: '当前没有可用的会话。',
       errFailed: '排程失败：',
+      errDisabled: '延时发送不可用：自动化任务（排程）功能未启用。',
     };
 
     const PRESETS = [
@@ -224,6 +226,19 @@ window.__ModuleLoader__.load({
       width: 10, height: 10, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
       strokeWidth: 2.4, strokeLinecap: 'round', 'aria-hidden': 'true', focusable: 'false',
     }, h('path', { d: 'M6 6l12 12M18 6L6 18' }));
+
+    /** Placeholder shown while the Host schedule face is not mounted (feature disabled in the profile). */
+    function InertControl(props) {
+      const t = typeof props.t === 'function' ? props.t : fallbackT;
+      return h('button', {
+        type: 'button',
+        disabled: true,
+        'aria-label': t('button'),
+        'aria-disabled': 'true',
+        title: t('errDisabled'),
+        style: { ...S.button(false), opacity: 0.45, cursor: 'default' },
+      }, clockIcon());
+    }
 
     function SendLater(props) {
       const t = typeof props.t === 'function' ? props.t : fallbackT;
@@ -536,21 +551,41 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['locale', 'slots', 'remote', 'remote.schedule'],
+      inject: ['locale', 'slots', 'remote'],
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, 'en', EN), 'send-later: en dictionary');
         ctx.effect(() => ctx.locale.register(NS, 'zh', ZH), 'send-later: zh dictionary');
-        ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
-          name: 'conversation.input.right',
-          id: 'send-later',
-          locale: NS,
-          inject: (sessionId) => ({
-            sessionId,
-            schedule: (request) => ctx.remote.schedule.create(request),
-            listCatalog: () => ctx.remote.schedule.catalog(),
-            cancelTask: (id) => ctx.remote.schedule.edit({ id, action: 'delete' }),
-          }),
-        }, SendLater));
+        ctx.effect(() => {
+          // Placeholder first: keeps the entry point visible (greyed out) even when the
+          // Automation tasks feature is disabled, where the schedule face never appears.
+          const disposePlaceholder = ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
+            name: 'conversation.input.right',
+            id: 'send-later',
+            locale: NS,
+            inject: () => ({}),
+          }, InertControl));
+          let disposeFull;
+          const undoInject = ctx.inject(['remote.schedule'], () => {
+            if (disposeFull) return;
+            disposePlaceholder();
+            disposeFull = ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
+              name: 'conversation.input.right',
+              id: 'send-later',
+              locale: NS,
+              inject: (sessionId) => ({
+                sessionId,
+                schedule: (request) => ctx.remote.schedule.create(request),
+                listCatalog: () => ctx.remote.schedule.catalog(),
+                cancelTask: (id) => ctx.remote.schedule.edit({ id, action: 'delete' }),
+              }),
+            }, SendLater));
+          });
+          return () => {
+            if (typeof undoInject === 'function') undoInject();
+            disposePlaceholder();
+            if (disposeFull) disposeFull();
+          };
+        }, 'send-later: composer control');
       },
     };
   },

@@ -39,27 +39,37 @@ const cancelCalls = [];
 let next = async (request) => { calls.push(request); return { ok: true, value: { id: `schedule-${calls.length}` } }; };
 let nextCatalog = async () => ({ ok: true, value: [] });
 let nextEdit = async (request) => { cancelCalls.push(request); return { ok: true, value: {} }; };
-const regs = [];
-def.apply({
-  effect: (fn) => fn(),
-  locale: { register: () => () => {} },
-  slots: {
-    inject: (name, cb) => { regs.push({ name, reg: cb() }); return () => {}; },
-    register: (reg, component) => ({ ...reg, component }),
-  },
-  remote: {
-    schedule: {
-      create: (request) => next(request),
-      catalog: () => nextCatalog(),
-      edit: (request) => nextEdit(request),
+
+// Fake client context: `scheduleFace` decides whether the remote.schedule face is mounted.
+function makeCtx(scheduleFace) {
+  const registered = new Map();
+  const disposers = [];
+  const ctx = {
+    remote: {
+      schedule: {
+        create: (request) => next(request),
+        catalog: () => nextCatalog(),
+        edit: (request) => nextEdit(request),
+      },
     },
-  },
-});
-assert.equal(regs.length, 1, 'exactly one slot registration');
-assert.equal(regs[0].name, 'conversation.input.right');
-const slot = regs[0].reg;
-const injected = slot.inject('session-test-1');
-assert.equal(injected.sessionId, 'session-test-1');
+    effect(fn) { const d = fn(); disposers.push(d); return d; },
+    locale: { register: () => () => {} },
+    inject(keys, cb) {
+      if (scheduleFace) { cb(ctx); return () => {}; }
+      return () => {};
+    },
+    slots: {
+      inject(name, cb) {
+        const d = () => registered.delete('send-later');
+        disposers.push(d);
+        cb();
+        return d;
+      },
+      register(reg, component) { const entry = { ...reg, component }; registered.set(reg.id, entry); return entry; },
+    },
+  };
+  return { ctx, registered, disposers };
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const container = win.document.getElementById('root');
@@ -82,7 +92,51 @@ const check = (name, fn) => {
   try { fn(); results.push(['PASS', name]); } catch (error) { results.push(['FAIL', `${name} :: ${error.message}`]); }
 };
 
+// Scenario B: schedule face absent → one inert placeholder with no schedule api.
+const off = makeCtx(false);
+def.apply(off.ctx);
+check('inert: one placeholder registration when schedule face is absent', () => assert.equal(off.registered.size, 1));
+const inertEntry = off.registered.get('send-later');
+check('inert: registers under the same slot and id', () => {
+  assert.equal(inertEntry.name, 'conversation.input.right');
+  assert.equal(inertEntry.id, 'send-later');
+});
+check('inert: exposes no schedule api', () => assert.equal(inertEntry.inject('x').schedule, undefined));
+check('cleanup: disposers remove the registration', () => {
+  off.disposers.forEach((d) => d());
+  assert.equal(off.registered.size, 0);
+});
+
+// Scenario A: schedule face present → the placeholder is swapped for the full control.
+const on = makeCtx(true);
+def.apply(on.ctx);
+check('face on: exactly one registration after the swap', () => assert.equal(on.registered.size, 1));
+const slot = on.registered.get('send-later');
+check('face on: full api is exposed', () => {
+  const inj = slot.inject('session-test-1');
+  assert.equal(inj.sessionId, 'session-test-1');
+  assert.equal(typeof inj.schedule, 'function');
+  assert.equal(typeof inj.listCatalog, 'function');
+  assert.equal(typeof inj.cancelTask, 'function');
+});
+const injected = slot.inject('session-test-1');
+
 (async () => {
+  // Inert placeholder rendering: disabled button, explanatory tooltip, no panel on click.
+  const inertDiv = win.document.createElement('div');
+  win.document.body.appendChild(inertDiv);
+  const inertRoot = createRoot(inertDiv);
+  await act(async () => { inertRoot.render(React.createElement(off.registered.get('send-later')?.component || inertEntry.component, {})); });
+  const inertButton = inertDiv.querySelector('button');
+  check('inert: button renders disabled with the unavailable tooltip', () => {
+    assert.equal(inertButton.disabled, true);
+    assert.ok(inertButton.title.includes('延时发送不可用'), `title was: ${inertButton.title}`);
+  });
+  await act(async () => { inertButton.click(); });
+  check('inert: click opens no panel', () => assert.equal(dialogNode(), null));
+  await act(async () => { inertRoot.unmount(); });
+  inertDiv.remove();
+
   await act(async () => { root.render(React.createElement(slot.component, injected)); });
   await act(async () => { await sleep(0); }); // mount refresh (catalog) settles
   const button = container.querySelector('button[aria-label="延时发送"]');
