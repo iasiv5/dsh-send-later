@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+Presentation release: house-style gradient icon (clock + departing paper plane), plugin-page meta (annotated title + one-line description, zh/en) in the sibling format, showcase-format README with webp screenshots and dual install paths (official plugin page / dsh-m). No UI or behavior changes.
+
 ## 0.2.1
 
 Quota-aware custom time (the prefill), published hours after 0.2.0 which lacked it.
