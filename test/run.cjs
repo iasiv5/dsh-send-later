@@ -240,6 +240,20 @@ const injected = slot.inject('session-test-1');
   await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   win.localStorage.clear();
 
+  // 4b. Cross-language adoption: a send created with the English marker is adopted here too (Q2).
+  nextCatalog = async () => ({
+    ok: true,
+    value: [
+      { id: 'remote-en', status: 'active', target: { kind: 'session', sessionId: 'session-test-1' }, title: 'Send later: from an English device', prompt: 'english send', scheduledAt: new Date(Date.now() + 3600000).toISOString() },
+    ],
+  });
+  win.localStorage.removeItem('dsh-send-later:v1:pending');
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(50); });
+  check('a task titled with the English marker is adopted on this device too', () => assert.equal(badgeNode() && badgeNode().textContent, '1'));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  win.localStorage.clear();
+
   // 5. Blank prompt is refused without calling the service.
   await act(async () => { button.click(); });
   dialog = dialogNode();
@@ -532,6 +546,7 @@ const injected = slot.inject('session-test-1');
   const at6 = new Date().toISOString();
   nextCatalog = async () => ({ ok: true, value: [{ ...stalledEntry(), id: 'admit-1' }] });
   nextRun = async () => admittedRun('admit-1', at6);
+  nextEdit = async (request) => { cancelCalls.push(request); nextCatalog = async () => ({ ok: true, value: [] }); return { ok: true, value: {} }; }; // the host stops listing a deleted task
   await openPanel();
   await act(async () => { await sleep(120); });
   check('an admitted run-now is followed by exactly one delete', () => assert.equal(cancelCalls.length, 1));
@@ -568,7 +583,9 @@ const injected = slot.inject('session-test-1');
   nextEdit = async (request) => {
     cancelCalls.push(request);
     deleteTries += 1;
-    return deleteTries === 1 ? { ok: false, error: { message: 'busy' } } : { ok: true, value: {} };
+    if (deleteTries === 1) return { ok: false, error: { message: 'busy' } };
+    nextCatalog = async () => ({ ok: true, value: [] }); // the host stops listing a deleted task
+    return { ok: true, value: {} };
   };
   await openPanel();
   await act(async () => { await sleep(3600); });
@@ -589,7 +606,7 @@ const injected = slot.inject('session-test-1');
     lastDelivery: { scheduledAt: at, deliveredAt: at, messageId: `m-${id}`, targetSessionId: SID },
     target: { kind: 'session', sessionId: SID } });
   const okNoop = async () => ({ ok: true, value: {} });
-  const fakeWatchdog = ({ catalog, run, cancel }) => {
+  const fakeWatchdog = ({ catalog, run, cancel, persistFails = false }) => {
     const clock = { t: T0 };
     const log = { runs: [], cancels: [], books: [], sleeps: [] };
     const ports = {
@@ -599,7 +616,7 @@ const injected = slot.inject('session-test-1');
         log.cancels.push({ id, expectedUpdatedAt });
         return cancel(id, expectedUpdatedAt, log.cancels.length);
       },
-      persistBook: (book) => { log.books.push(book); },
+      persistBook: (book) => { if (persistFails) throw new Error('ledger unavailable'); log.books.push(book); },
       now: () => clock.t,
       sleep: async (ms) => { log.sleeps.push(ms); clock.t += ms; },
       isAlive: () => true,
@@ -615,13 +632,29 @@ const injected = slot.inject('session-test-1');
     assert.equal(adopted.catalogAvailable, true);
   });
 
+  check('the title markers cover both built-in languages (Q2)', () => assert.deepEqual(def.internals.titleMarkers, ['Send later: ', '延时发送：']));
+
   const lag = mergePending({ registry: [
-    { id: 'lag-1', sessionId: SID, at: isoAt(T0), prompt: '刚排', ts: T0 - 299999 },
-    { id: 'old-1', sessionId: SID, at: isoAt(T0), prompt: '过期', ts: T0 - 300000 },
+    { id: 'lag-1', sessionId: SID, at: isoAt(T0), prompt: '刚排', ts: T0 - 29999 },
+    { id: 'old-1', sessionId: SID, at: isoAt(T0), prompt: '过期', ts: T0 - 30000 },
   ], catalog: [], sid: SID, markers: ['延时发送：'], now: T0 });
-  check('a just-created task the catalog does not know yet is shown but never owned; the window is 5 minutes', () => {
+  check('a just-created task the catalog does not list yet is shown but never owned, for 30 seconds (Q14)', () => {
     assert.deepEqual(lag.pending.map((r) => r.id), ['lag-1']);
     assert.equal(lag.owned.size, 0);
+  });
+
+  const ended = mergePending({ registry: [
+    { id: 'e-1', sessionId: SID, at: isoAt(T0), prompt: '已结束', ts: T0 - 10000 },
+  ], catalog: [{ ...stalled('e-1', 900000), status: 'ended' }], sid: SID, markers: ['延时发送：'], now: T0 });
+  check('a send the catalog knows as ended is never shown from the registry alone (Q14)', () => {
+    assert.deepEqual(ended.pending, []);
+  });
+
+  const unlisted = mergePending({ registry: [
+    { id: 'l-60', sessionId: SID, at: isoAt(T0), prompt: '一分钟前', ts: T0 - 60000 },
+  ], catalog: [], sid: SID, markers: ['延时发送：'], now: T0 });
+  check('a send the catalog has not listed for over 30 seconds is no longer shown (Q14)', () => {
+    assert.deepEqual(unlisted.pending, []);
   });
 
   const offline = mergePending({ registry: [
@@ -718,6 +751,32 @@ const injected = slot.inject('session-test-1');
     assert.deepEqual(secondOutcomes, []);
     assert.equal(r12.log.runs.length, 1);
     assert.deepEqual(firstOutcomes.map((o) => o.outcome), ['refused']);
+  });
+
+  const c1 = fakeWatchdog({ catalog: [{ ...stalled('c1-1', 900000), lastDelivery: { scheduledAt: isoAt(T0), deliveredAt: isoAt(T0), messageId: 'm-c1', targetSessionId: SID } }],
+    run: async () => ({ ok: true, value: {} }), cancel: okNoop });
+  const oc1 = await c1.watchdog.scan({ entries: [stalled('c1-1', 900000)], owned: new Set(['c1-1']), book: {} });
+  check('a re-check that finds the task already delivered is skipped and spends no budget (Q21)', () => {
+    assert.deepEqual(oc1.map((o) => o.outcome), ['skipped']);
+    assert.equal(c1.log.books.length, 0);
+  });
+
+  const c2 = fakeWatchdog({ catalog: [stalled('p-1', 900000)], run: async () => ({ ok: true, value: {} }), cancel: okNoop, persistFails: true });
+  const oc2 = await c2.watchdog.scan({ entries: [stalled('p-1', 900000)], owned: new Set(['p-1']), book: {} }).catch((error) => ({ thrown: error }));
+  check('if the attempt cannot be recorded, nothing is sent (Q21)', () => {
+    assert.equal(oc2.thrown, undefined);
+    assert.deepEqual(oc2.map((o) => o.outcome), ['skipped']);
+    assert.equal(c2.log.runs.length, 0);
+  });
+
+  const c3 = fakeWatchdog({ catalog: [stalled('q-1', 900000)], run: async () => ({ ok: true, value: admitted('q-1', isoAt(T0)) }), cancel: okNoop });
+  await c3.watchdog.scan({ entries: [stalled('q-1', 900000)], owned: new Set(['q-1']), book: {} });
+  check('a retired task leaves no ledger entry behind (Q24)', () => assert.equal('q-1' in c3.log.books[c3.log.books.length - 1], false));
+
+  check('forgetting a retired task returns a new ledger without its entry (Q24)', () => {
+    const before = { a: { count: 1, lastAt: 5 }, c: { count: 2, lastAt: 6 } };
+    assert.deepEqual(def.internals.forgetNudge(before, 'a'), { c: { count: 2, lastAt: 6 } });
+    assert.ok('a' in before);
   });
 
   check('ledger updates are pure: applyAttempt and markArchived return a new book', () => {

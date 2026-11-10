@@ -27,6 +27,8 @@ window.__ModuleLoader__.load({
     const NUDGE_GRACE_MS = 5 * 60000;
     const NUDGE_GAP_MS = 10 * 60000;
     const NUDGE_MAX = 3;
+    // A just-created send the catalog does not list yet stays visible this long (Q14): the catalog can lag a create.
+    const LAG_WINDOW_MS = 30000;
     // A run-now keeps the one-shot's occurrence on the Host, which delivers it again once the Host's
     // 60 s delivery floor clears. Retiring the task (delete) inside that window prevents the repeat;
     // a failed delete is retried on the cadence below until the window closes.
@@ -113,6 +115,9 @@ window.__ModuleLoader__.load({
       snipResumeLabel: '安全继续',
       snipResumeText: '从中断处继续，不要开始与目标无关的新工作。',
     };
+    // Title markers a task may carry: every built-in language's prefix, so a device adopts sends that were
+    // created in another UI language (Q2). Derived from the dictionaries, never hand-maintained.
+    const TITLE_MARKERS = [EN.titlePrefix, ZH.titlePrefix];
 
     const PRESETS = [
       { id: '10m', seconds: 600, label: 'preset10m' },
@@ -251,6 +256,12 @@ window.__ModuleLoader__.load({
         archived: true,
       } };
     }
+    /** Pure: the ledger without a retired task's entry (Q24). */
+    function forgetNudge(book, id) {
+      const next = { ...book };
+      delete next[id];
+      return next;
+    }
     /** Glossary 搁浅: past its target time, no receipt, not in flight. State only, no grace. */
     function isStalled(entry, now) {
       return Boolean(entry && entry.status === 'active'
@@ -318,9 +329,11 @@ window.__ModuleLoader__.load({
           owned.add(entry.id);
         }
       }
-      // Keep just-created entries the catalog does not know about yet (the catalog can lag a create).
+      // A just-created send the catalog does not list yet stays visible for LAG_WINDOW_MS. A send the catalog
+      // does know is never shown from the registry alone, so a known ended or moved task drops out (Q14).
       for (const r of registry) {
-        if (!seen.has(r.id) && r.sessionId === sid && typeof r.ts === 'number' && now - r.ts < 300000) {
+        if (!seen.has(r.id) && !byId.has(r.id) && r.sessionId === sid
+          && typeof r.ts === 'number' && now - r.ts < LAG_WINDOW_MS) {
           live.push({ id: r.id, at: r.at, prompt: typeof r.prompt === 'string' ? r.prompt : '' });
           seen.add(r.id);
         }
@@ -367,6 +380,10 @@ window.__ModuleLoader__.load({
           const entry = Array.isArray(entries) ? entries.find((candidate) => candidate && candidate.id === id) : undefined;
           const now = ports.now();
           if (!(entry && isStalled(entry, now) && pastGrace(entry, now))) return 'skipped';
+          // Q21: the attempt is counted once the re-check says a run is due, and it is persisted before the run.
+          // If it cannot be recorded, nothing is sent.
+          state.book = applyAttempt(state.book, id, now);
+          ports.persistBook(state.book);
           ran = true;
           const outcome = await ports.runTask(id);
           if (outcome && outcome.ok === false && outcome.error && outcome.error.code === ARCHIVED_CODE) {
@@ -375,7 +392,15 @@ window.__ModuleLoader__.load({
             return 'archived';
           }
           const admitted = outcome && outcome.ok === true ? outcome.value : undefined;
-          if (isAdmittedRun(admitted, id)) return await retire(id, admitted);
+          if (isAdmittedRun(admitted, id)) {
+            const retired = await retire(id, admitted);
+            // Q24: a retired task leaves no entry in the ledger.
+            if (retired === 'retired') {
+              state.book = forgetNudge(state.book, id);
+              ports.persistBook(state.book);
+            }
+            return retired;
+          }
           if (admitted && admitted.code !== undefined) return 'refused';
           return 'run-failed';
         } catch (_error) {
@@ -393,8 +418,6 @@ window.__ModuleLoader__.load({
           const due = dueNudges({ entries, owned, book, now: ports.now() }).filter((id) => !inFlight.has(id));
           const started = due.map((id) => {
             inFlight.add(id);
-            state.book = applyAttempt(state.book, id, ports.now());
-            ports.persistBook(state.book);
             return nudgeOne(id, state).then((outcome) => {
               if (onOutcome) onOutcome(id, outcome);
               return { id, outcome };
@@ -641,7 +664,7 @@ window.__ModuleLoader__.load({
           entries = undefined;
         }
         if (!aliveRef.current) return;
-        const merged = mergePending({ registry: loadRegistry(), catalog: entries, sid, markers: [t('titlePrefix')], now: Date.now() });
+        const merged = mergePending({ registry: loadRegistry(), catalog: entries, sid, markers: TITLE_MARKERS, now: Date.now() });
         if (!merged.catalogAvailable) {
           setPending(merged.pending);
           return;
@@ -987,7 +1010,7 @@ window.__ModuleLoader__.load({
 
     return {
       // Pure helpers and the watchdog module, exposed for the offline tests. The host reads only inject/apply.
-      internals: { mergePending, isStalled, pastGrace, dueNudges, applyAttempt, markArchived, isAdmittedRun, createWatchdog },
+      internals: { mergePending, isStalled, pastGrace, dueNudges, applyAttempt, forgetNudge, markArchived, isAdmittedRun, createWatchdog, titleMarkers: TITLE_MARKERS },
       inject: ['locale', 'slots', 'remote'],
       apply(ctx) {
         ensureFlashStyles();
