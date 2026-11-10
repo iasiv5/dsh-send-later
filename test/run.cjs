@@ -488,6 +488,71 @@ const injected = slot.inject('session-test-1');
   await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   win.localStorage.removeItem('dsh-send-later:v1:nudges');
 
+  // 15a. An admitted run-now is retired: the task is deleted with the updatedAt the run returned.
+  // (0.2.5: a run-now keeps the one-shot's occurrence on the Host, so it would deliver again.)
+  win.localStorage.clear();
+  const admittedRun = (id, at) => ({ ok: true, value: {
+    id, status: 'active', scheduledAt: iso(15 * 60000), updatedAt: at,
+    lastDelivery: { scheduledAt: at, deliveredAt: at, messageId: `m-${id}`, targetSessionId: 'session-test-1' },
+    target: { kind: 'session', sessionId: 'session-test-1' },
+  } });
+  const at15a = new Date().toISOString();
+  nextCatalog = async () => ({ ok: true, value: [{ ...stalledEntry(), id: 'admit-1' }] });
+  nextRun = async () => admittedRun('admit-1', at15a);
+  const cancels15a = cancelCalls.length;
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(120); });
+  check('an admitted run-now is followed by exactly one delete', () => assert.equal(cancelCalls.length - cancels15a, 1));
+  check('the delete carries the updatedAt that the run returned', () => assert.deepEqual(
+    cancelCalls[cancelCalls.length - 1], { id: 'admit-1', action: 'delete', expectedUpdatedAt: at15a }));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await act(async () => { await sleep(30); });
+
+  // 15b. A refused run-now (execution pending) proves nothing was sent, so nothing is deleted.
+  win.localStorage.clear();
+  nextCatalog = async () => ({ ok: true, value: [{ ...stalledEntry(), id: 'refuse-1' }] });
+  nextRun = async () => ({ ok: true, value: { id: 'refuse-1', code: 'schedule_execution_pending' } });
+  const cancels15b = cancelCalls.length;
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(120); });
+  check('a refused run-now is not deleted', () => assert.equal(cancelCalls.length - cancels15b, 0));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await act(async () => { await sleep(30); });
+
+  // 15c. A delete the Host refuses as a conflict (the task changed after the run) is given up, not retried.
+  win.localStorage.clear();
+  const at15c = new Date().toISOString();
+  nextCatalog = async () => ({ ok: true, value: [{ ...stalledEntry(), id: 'conflict-1' }] });
+  nextRun = async () => admittedRun('conflict-1', at15c);
+  nextEdit = async (request) => { cancelCalls.push(request); return { ok: true, value: { id: request.id, code: 'schedule_conflict' } }; };
+  const cancels15c = cancelCalls.length;
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(120); });
+  check('a conflicting delete is attempted once and not retried', () => assert.equal(cancelCalls.length - cancels15c, 1));
+  nextEdit = async (request) => { cancelCalls.push(request); return { ok: true, value: {} }; };
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await act(async () => { await sleep(30); });
+
+  // 15d. A transient delete failure is retried on the retry cadence while the window is open.
+  win.localStorage.clear();
+  const at15d = new Date().toISOString();
+  let deleteTries = 0;
+  nextCatalog = async () => ({ ok: true, value: [{ ...stalledEntry(), id: 'retry-1' }] });
+  nextRun = async () => admittedRun('retry-1', at15d);
+  nextEdit = async (request) => {
+    cancelCalls.push(request);
+    deleteTries += 1;
+    return deleteTries === 1 ? { ok: false, error: { message: 'busy' } } : { ok: true, value: {} };
+  };
+  await act(async () => { button.click(); });
+  await act(async () => { await sleep(3600); });
+  check('a failed delete is retried and then succeeds', () => assert.equal(deleteTries, 2));
+  nextEdit = async (request) => { cancelCalls.push(request); return { ok: true, value: {} }; };
+  nextRun = async () => ({ ok: true, value: {} });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+  await act(async () => { await sleep(30); });
+  win.localStorage.removeItem('dsh-send-later:v1:nudges');
+
   // 16. No JavaScript errors from the module itself.
   const moduleErrors = consoleErrors.filter((line) => /TypeError|ReferenceError|SyntaxError|slot entry crashed/.test(line));
   check('no TypeError/ReferenceError from the module', () => assert.equal(moduleErrors.length, 0, moduleErrors.join(' | ')));

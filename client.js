@@ -27,6 +27,11 @@ window.__ModuleLoader__.load({
     const NUDGE_GRACE_MS = 5 * 60000;
     const NUDGE_GAP_MS = 10 * 60000;
     const NUDGE_MAX = 3;
+    // A run-now keeps the one-shot's occurrence on the Host, which delivers it again once the Host's
+    // 60 s delivery floor clears. Retiring the task (delete) inside that window prevents the repeat;
+    // a failed delete is retried on the cadence below until the window closes.
+    const RETIRE_WINDOW_MS = 55000;
+    const RETIRE_RETRY_MS = 3000;
     const ARCHIVED_CODE = 'schedule/target-archived';
 
     const EN = {
@@ -264,6 +269,12 @@ window.__ModuleLoader__.load({
       const lastAt = book && typeof book.lastAt === 'number' ? book.lastAt : -Infinity;
       return now - lastAt >= NUDGE_GAP_MS;
     }
+    /** An admitted run-now answers with the task itself, carrying the receipt that proves the delivery.
+     * A refusal answers with a bare `code` (execution pending, not found): nothing was sent. */
+    function isAdmittedRun(value, id) {
+      return Boolean(value && typeof value === 'object' && value.id === id && value.code === undefined
+        && value.lastDelivery && typeof value.lastDelivery.deliveredAt === 'string');
+    }
 
     /** The most recent custom prompt (the strip shows exactly two chips: builtin + this). */
     function loadSnippets() {
@@ -489,11 +500,41 @@ window.__ModuleLoader__.load({
           const outcome = await props.runTask(id);
           if (outcome && outcome.ok === false && outcome.error && outcome.error.code === ARCHIVED_CODE) {
             markArchived(id);
+            return;
           }
+          const admitted = outcome && outcome.ok === true ? outcome.value : undefined;
+          if (isAdmittedRun(admitted, id)) await retireDelivered(id, admitted);
         } catch (_error) {
           /* silent: the next poll retries within budget */
         } finally {
           nudgingRef.current.delete(id);
+        }
+      }
+
+      /** Delete a task whose run-now was admitted, while the Host still holds its next delivery back
+       * (60 s floor after the receipt). expectedUpdatedAt makes the Host refuse the delete when the task
+       * changed since the run; a refusal, a task already gone, or a closed window ends the retries. */
+      async function retireDelivered(id, delivered) {
+        const props = propsRef.current;
+        if (typeof props.cancelTask !== 'function') return;
+        const deadline = Date.parse(delivered.lastDelivery.deliveredAt) + RETIRE_WINDOW_MS;
+        for (;;) {
+          let result;
+          try {
+            result = await props.cancelTask(id, delivered.updatedAt);
+          } catch (_error) {
+            result = undefined;
+          }
+          if (result && result.ok === true) {
+            const code = result.value && result.value.code;
+            if (code === undefined || code === 'schedule_not_found') {
+              if (aliveRef.current) refreshPending();
+              return;
+            }
+            if (code === 'schedule_conflict') return;
+          }
+          if (!aliveRef.current || Date.now() + RETIRE_RETRY_MS > deadline) return;
+          await new Promise((resolve) => setTimeout(resolve, RETIRE_RETRY_MS));
         }
       }
 
@@ -919,7 +960,9 @@ window.__ModuleLoader__.load({
                 sessionId,
                 schedule: (request) => api.create(request),
                 listCatalog: () => api.catalog(),
-                cancelTask: (id) => api.edit({ id, action: 'delete' }),
+                cancelTask: (id, expectedUpdatedAt) => api.edit(expectedUpdatedAt === undefined
+                  ? { id, action: 'delete' }
+                  : { id, action: 'delete', expectedUpdatedAt }),
                 runTask: (id) => api.run({ id }),
                 fetchQuota: () => fetchGlm5hQuota(),
               }),
