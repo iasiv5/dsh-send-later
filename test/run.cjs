@@ -577,6 +577,161 @@ const injected = slot.inject('session-test-1');
   resetWatchdog();
   win.localStorage.removeItem('dsh-send-later:v1:nudges');
 
+  // M. The pending merge, the watchdog policy and the watchdog module, driven directly with fake ports
+  // (no DOM, no real timers). The component tests above prove the wiring; these pin each branch.
+  const { mergePending, isStalled, dueNudges, applyAttempt, markArchived, isAdmittedRun, createWatchdog } = def.internals;
+  const T0 = Date.parse('2026-11-10T06:00:00.000Z');
+  const SID = 'session-test-1';
+  const isoAt = (ms) => new Date(ms).toISOString();
+  const stalled = (id, msAgo) => ({ id, status: 'active', kind: 'at', title: '延时发送：继续', prompt: '继续',
+    scheduledAt: isoAt(T0 - msAgo), target: { kind: 'session', sessionId: SID } });
+  const admitted = (id, at) => ({ id, status: 'active', scheduledAt: isoAt(T0 - 900000), updatedAt: at,
+    lastDelivery: { scheduledAt: at, deliveredAt: at, messageId: `m-${id}`, targetSessionId: SID },
+    target: { kind: 'session', sessionId: SID } });
+  const okNoop = async () => ({ ok: true, value: {} });
+  const fakeWatchdog = ({ catalog, run, cancel }) => {
+    const clock = { t: T0 };
+    const log = { runs: [], cancels: [], books: [], sleeps: [] };
+    const ports = {
+      listCatalog: async () => ({ ok: true, value: catalog }),
+      runTask: async (id) => { log.runs.push(id); return run(id); },
+      cancelTask: async (id, expectedUpdatedAt) => {
+        log.cancels.push({ id, expectedUpdatedAt });
+        return cancel(id, expectedUpdatedAt, log.cancels.length);
+      },
+      persistBook: (book) => { log.books.push(book); },
+      now: () => clock.t,
+      sleep: async (ms) => { log.sleeps.push(ms); clock.t += ms; },
+      isAlive: () => true,
+    };
+    return { watchdog: createWatchdog(ports), log };
+  };
+
+  const adopted = mergePending({ registry: [], catalog: [{ ...stalled('ad-1', 60000), title: '延时发送：自定义' }],
+    sid: SID, markers: ['延时发送：'], now: T0 });
+  check('pending merge adopts a catalog task by its title marker and owns it', () => {
+    assert.deepEqual(adopted.pending.map((r) => r.id), ['ad-1']);
+    assert.ok(adopted.owned.has('ad-1'));
+    assert.equal(adopted.catalogAvailable, true);
+  });
+
+  const lag = mergePending({ registry: [
+    { id: 'lag-1', sessionId: SID, at: isoAt(T0), prompt: '刚排', ts: T0 - 299999 },
+    { id: 'old-1', sessionId: SID, at: isoAt(T0), prompt: '过期', ts: T0 - 300000 },
+  ], catalog: [], sid: SID, markers: ['延时发送：'], now: T0 });
+  check('a just-created task the catalog does not know yet is shown but never owned; the window is 5 minutes', () => {
+    assert.deepEqual(lag.pending.map((r) => r.id), ['lag-1']);
+    assert.equal(lag.owned.size, 0);
+  });
+
+  const offline = mergePending({ registry: [
+    { id: 'off-1', sessionId: SID, at: isoAt(T0), prompt: '离线', ts: T0 },
+    { id: 'other-2', sessionId: 'session-other', at: isoAt(T0), prompt: '别处', ts: T0 },
+  ], catalog: undefined, sid: SID, markers: ['延时发送：'], now: T0 });
+  check("an unavailable catalog falls back to this session's registry rows and owns nothing", () => {
+    assert.deepEqual(offline.pending.map((r) => r.id), ['off-1']);
+    assert.equal(offline.owned.size, 0);
+    assert.equal(offline.catalogAvailable, false);
+  });
+
+  check('stalled is state only: past its target time, no grace', () => assert.equal(isStalled(stalled('s-1', 60000), T0), true));
+  const policyEntries = [stalled('g-young', 60000), stalled('g-old', 600000), stalled('g-capped', 600000),
+    stalled('g-gap', 600000), stalled('g-arch', 600000)];
+  check('the policy layers grace, gap, cap and archived over the stalled state', () => {
+    const book = {
+      'g-capped': { count: 3, lastAt: T0 - 600000 },
+      'g-gap': { count: 1, lastAt: T0 - 1000 },
+      'g-arch': { count: 1, lastAt: T0 - 600000, archived: true },
+    };
+    assert.deepEqual(dueNudges({ entries: policyEntries, owned: new Set(policyEntries.map((e) => e.id)), book, now: T0 }), ['g-old']);
+  });
+
+  const r5 = fakeWatchdog({ catalog: [stalled('r-1', 900000)], run: async () => ({ ok: true, value: admitted('r-1', isoAt(T0)) }), cancel: okNoop });
+  const o5 = await r5.watchdog.scan({ entries: [stalled('r-1', 900000)], owned: new Set(['r-1']), book: {} });
+  check('an admitted run-now is retired with the updatedAt the run returned', () => {
+    assert.deepEqual(o5.map((o) => o.outcome), ['retired']);
+    assert.deepEqual(r5.log.cancels, [{ id: 'r-1', expectedUpdatedAt: isoAt(T0) }]);
+  });
+  check('the attempt reaches the ledger before the run, and the ledger counts it', () => assert.equal(r5.log.books[0]['r-1'].count, 1));
+
+  const r6 = fakeWatchdog({ catalog: [stalled('f-1', 900000)],
+    run: async () => ({ ok: true, value: { id: 'f-1', code: 'schedule_execution_pending' } }), cancel: okNoop });
+  const o6 = await r6.watchdog.scan({ entries: [stalled('f-1', 900000)], owned: new Set(['f-1']), book: {} });
+  check('a refused run-now is outcome refused and never deleted', () => {
+    assert.deepEqual(o6.map((o) => o.outcome), ['refused']);
+    assert.equal(r6.log.cancels.length, 0);
+  });
+
+  const r7 = fakeWatchdog({ catalog: [stalled('a-1', 900000)],
+    run: async () => ({ ok: false, error: { code: 'schedule/target-archived' } }), cancel: okNoop });
+  const o7 = await r7.watchdog.scan({ entries: [stalled('a-1', 900000)], owned: new Set(['a-1']), book: {} });
+  check('an archived destination is outcome archived and its ledger entry is flagged', () => {
+    assert.deepEqual(o7.map((o) => o.outcome), ['archived']);
+    assert.equal(r7.log.books[r7.log.books.length - 1]['a-1'].archived, true);
+  });
+
+  const delivered8 = { ...stalled('k-1', 900000),
+    lastDelivery: { scheduledAt: isoAt(T0), deliveredAt: isoAt(T0), messageId: 'm-k', targetSessionId: SID } };
+  const r8 = fakeWatchdog({ catalog: [delivered8], run: async () => ({ ok: true, value: {} }), cancel: okNoop });
+  const o8 = await r8.watchdog.scan({ entries: [stalled('k-1', 900000)], owned: new Set(['k-1']), book: {} });
+  check('a task delivered between the scan and the re-check is skipped, not run', () => {
+    assert.deepEqual(o8.map((o) => o.outcome), ['skipped']);
+    assert.equal(r8.log.runs.length, 0);
+  });
+
+  const r9 = fakeWatchdog({ catalog: [stalled('c-1', 900000)], run: async () => ({ ok: true, value: admitted('c-1', isoAt(T0)) }),
+    cancel: async () => ({ ok: true, value: { id: 'c-1', code: 'schedule_conflict' } }) });
+  const o9 = await r9.watchdog.scan({ entries: [stalled('c-1', 900000)], owned: new Set(['c-1']), book: {} });
+  check('a conflicting delete is given up after one attempt', () => {
+    assert.deepEqual(o9.map((o) => o.outcome), ['conflict']);
+    assert.equal(r9.log.cancels.length, 1);
+  });
+
+  const r10 = fakeWatchdog({ catalog: [stalled('t-1', 900000)], run: async () => ({ ok: true, value: admitted('t-1', isoAt(T0)) }),
+    cancel: async (id, at, attempt) => (attempt === 1 ? { ok: false, error: { message: 'busy' } } : { ok: true, value: {} }) });
+  const o10 = await r10.watchdog.scan({ entries: [stalled('t-1', 900000)], owned: new Set(['t-1']), book: {} });
+  check('a transient delete failure is retried on the 3 s cadence and then succeeds', () => {
+    assert.deepEqual(o10.map((o) => o.outcome), ['retired']);
+    assert.equal(r10.log.cancels.length, 2);
+    assert.deepEqual(r10.log.sleeps, [3000]);
+  });
+
+  const r11 = fakeWatchdog({ catalog: [stalled('w-1', 900000)], run: async () => ({ ok: true, value: admitted('w-1', isoAt(T0)) }),
+    cancel: async () => ({ ok: false, error: { message: 'down' } }) });
+  const o11 = await r11.watchdog.scan({ entries: [stalled('w-1', 900000)], owned: new Set(['w-1']), book: {} });
+  check('retries stop when the 55 s window closes: 19 attempts on the 3 s cadence', () => {
+    assert.deepEqual(o11.map((o) => o.outcome), ['window-closed']);
+    assert.equal(r11.log.cancels.length, 19);
+  });
+
+  let releaseRun;
+  const runGate = new Promise((resolve) => { releaseRun = resolve; });
+  const r12 = fakeWatchdog({ catalog: [stalled('i-1', 900000)],
+    run: async () => { await runGate; return { ok: true, value: { id: 'i-1', code: 'schedule_execution_pending' } }; }, cancel: okNoop });
+  const entries12 = [stalled('i-1', 900000)];
+  const firstScan = r12.watchdog.scan({ entries: entries12, owned: new Set(['i-1']), book: {} });
+  const secondScan = r12.watchdog.scan({ entries: entries12, owned: new Set(['i-1']), book: {} });
+  releaseRun(); // release only after both scans have started, so a broken guard shows up as a failure, not a hang
+  const secondOutcomes = await secondScan;
+  const firstOutcomes = await firstScan;
+  check('overlapping scans nudge a task at most once: a second scan starts nothing while one is in flight', () => {
+    assert.deepEqual(secondOutcomes, []);
+    assert.equal(r12.log.runs.length, 1);
+    assert.deepEqual(firstOutcomes.map((o) => o.outcome), ['refused']);
+  });
+
+  check('ledger updates are pure: applyAttempt and markArchived return a new book', () => {
+    const before = { a: { count: 1, lastAt: 5 } };
+    assert.deepEqual(applyAttempt(before, 'a', 9).a, { count: 2, lastAt: 9 });
+    assert.deepEqual(before.a, { count: 1, lastAt: 5 });
+    assert.equal(markArchived(before, 'b', 7).b.archived, true);
+  });
+
+  check('an admitted run-now is told apart from a refusal', () => {
+    assert.equal(isAdmittedRun(admitted('x1', isoAt(T0)), 'x1'), true);
+    assert.equal(isAdmittedRun({ id: 'x1', code: 'schedule_execution_pending' }, 'x1'), false);
+  });
+
   // 14. No JavaScript errors from the module itself.
   const moduleErrors = consoleErrors.filter((line) => /TypeError|ReferenceError|SyntaxError|slot entry crashed/.test(line));
   check('no TypeError/ReferenceError from the module', () => assert.equal(moduleErrors.length, 0, moduleErrors.join(' | ')));

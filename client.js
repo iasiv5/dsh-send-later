@@ -238,27 +238,38 @@ window.__ModuleLoader__.load({
     function loadNudges() {
       return loadStored(STORE_NUDGES, (v) => v && typeof v === 'object' && !Array.isArray(v)) ?? {};
     }
-    function recordNudge(id, now) {
-      const map = loadNudges();
-      const book = map[id] && typeof map[id] === 'object' ? map[id] : {};
-      map[id] = { count: (typeof book.count === 'number' ? book.count : 0) + 1, lastAt: now };
-      storeValue(STORE_NUDGES, map);
+    /** Pure ledger updates: the caller persists the returned book (Q8). */
+    function applyAttempt(book, id, now) {
+      const prior = book[id] && typeof book[id] === 'object' ? book[id] : {};
+      return { ...book, [id]: { count: (typeof prior.count === 'number' ? prior.count : 0) + 1, lastAt: now } };
     }
-    function markArchived(id) {
-      const map = loadNudges();
-      const book = map[id] && typeof map[id] === 'object' ? map[id] : {};
-      map[id] = { count: typeof book.count === 'number' ? book.count : 0, lastAt: typeof book.lastAt === 'number' ? book.lastAt : Date.now(), archived: true };
-      storeValue(STORE_NUDGES, map);
+    function markArchived(book, id, now) {
+      const prior = book[id] && typeof book[id] === 'object' ? book[id] : {};
+      return { ...book, [id]: {
+        count: typeof prior.count === 'number' ? prior.count : 0,
+        lastAt: typeof prior.lastAt === 'number' ? prior.lastAt : now,
+        archived: true,
+      } };
     }
-    /** A delivery the Host stopped driving: still active, past due by the grace window,
-     * nothing in flight, and no delivery was ever acknowledged. */
-    function isStalledDelivery(entry, now) {
+    /** Glossary 搁浅: past its target time, no receipt, not in flight. State only, no grace. */
+    function isStalled(entry, now) {
       return Boolean(entry && entry.status === 'active'
         && typeof entry.scheduledAt === 'string'
         && !entry.executionActive
         && entry.lastDelivery === undefined
         && Number.isFinite(Date.parse(entry.scheduledAt))
-        && Date.parse(entry.scheduledAt) + NUDGE_GRACE_MS <= now);
+        && Date.parse(entry.scheduledAt) <= now);
+    }
+    /** Watchdog policy on top of the state: a stalled task only becomes due after the grace window. */
+    function pastGrace(entry, now) {
+      return Date.parse(entry.scheduledAt) + NUDGE_GRACE_MS <= now;
+    }
+    /** Owned, stalled, past the grace window and within the budget: the ids to nudge now. */
+    function dueNudges({ entries, owned, book, now }) {
+      return entries
+        .filter((entry) => entry && owned.has(entry.id) && isStalled(entry, now) && pastGrace(entry, now)
+          && autoNudgeDue(entry, book, now))
+        .map((entry) => entry.id);
     }
     /** Whether the per-task budget allows an automatic nudge right now. */
     function autoNudgeDue(entry, nudges, now) {
@@ -274,6 +285,124 @@ window.__ModuleLoader__.load({
     function isAdmittedRun(value, id) {
       return Boolean(value && typeof value === 'object' && value.id === id && value.code === undefined
         && value.lastDelivery && typeof value.lastDelivery.deliveredAt === 'string');
+    }
+    const toPendingRow = (r) => ({ id: r.id, at: r.at, prompt: typeof r.prompt === 'string' ? r.prompt : '' });
+    /** This session's delayed sends, from the local registry and the catalog. Pure: the caller does the
+     * registry write-back and the state update. `owned` holds the catalog ids this session owns (registry
+     * id or title marker); a catalog-lag fallback row is shown but never owned. */
+    function mergePending({ registry, catalog, sid, markers, now }) {
+      if (!Array.isArray(catalog)) {
+        // Catalog unavailable: fall back to the local registry so the badge stays honest.
+        return { pending: registry.filter((r) => r.sessionId === sid).map(toPendingRow), owned: new Set(), catalogAvailable: false };
+      }
+      const byId = new Map(catalog.map((entry) => [entry.id, entry]));
+      const isOurs = (entry) => entry && entry.status === 'active'
+        && entry.target && entry.target.kind === 'session' && entry.target.sessionId === sid;
+      const live = [];
+      const seen = new Set();
+      const owned = new Set();
+      for (const r of registry) {
+        const entry = byId.get(r.id);
+        if (entry && isOurs(entry) && !seen.has(r.id)) {
+          live.push({ id: r.id, at: entry.scheduledAt || r.at, prompt: typeof entry.prompt === 'string' ? entry.prompt : r.prompt || '' });
+          seen.add(r.id);
+          owned.add(r.id);
+        }
+      }
+      // Adopt tasks created elsewhere (another browser or device) that carry our title marker.
+      for (const entry of catalog) {
+        if (isOurs(entry) && !seen.has(entry.id)
+          && typeof entry.title === 'string' && markers.some((marker) => entry.title.startsWith(marker))) {
+          live.push({ id: entry.id, at: entry.scheduledAt, prompt: typeof entry.prompt === 'string' ? entry.prompt : '' });
+          seen.add(entry.id);
+          owned.add(entry.id);
+        }
+      }
+      // Keep just-created entries the catalog does not know about yet (the catalog can lag a create).
+      for (const r of registry) {
+        if (!seen.has(r.id) && r.sessionId === sid && typeof r.ts === 'number' && now - r.ts < 300000) {
+          live.push({ id: r.id, at: r.at, prompt: typeof r.prompt === 'string' ? r.prompt : '' });
+          seen.add(r.id);
+        }
+      }
+      live.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+      return { pending: live, owned, catalogAvailable: true };
+    }
+    /** The delivery watchdog as one module (Q22). Ports are injected: the catalog and run/delete faces,
+     * the ledger writer, the clock, the retry sleep and the panel's liveness. The in-flight set belongs to
+     * the instance, so one task is never nudged twice at once. Each started task reports one outcome, and
+     * the caller decides whether the list needs a refresh (Q23). */
+    function createWatchdog(ports) {
+      const inFlight = new Set();
+
+      /** Delete a task whose run-now was admitted. The Host holds its next delivery back for 60 s after
+       * the receipt, so failed deletes retry until that window closes. expectedUpdatedAt makes the Host
+       * refuse the delete when the task changed since the run. */
+      async function retire(id, delivered) {
+        const deadline = Date.parse(delivered.lastDelivery.deliveredAt) + RETIRE_WINDOW_MS;
+        for (;;) {
+          let result;
+          try {
+            result = await ports.cancelTask(id, delivered.updatedAt);
+          } catch (_error) {
+            result = undefined;
+          }
+          if (result && result.ok === true) {
+            const code = result.value && result.value.code;
+            if (code === undefined || code === 'schedule_not_found') return 'retired';
+            if (code === 'schedule_conflict') return 'conflict';
+          }
+          if (!ports.isAlive() || ports.now() + RETIRE_RETRY_MS > deadline) return 'window-closed';
+          await ports.sleep(RETIRE_RETRY_MS);
+        }
+      }
+
+      /** One due task: re-read the catalog first (never re-run or delete what the Host just delivered),
+       * run it, and retire it when the run was admitted. */
+      async function nudgeOne(id, state) {
+        let ran = false;
+        try {
+          const result = await ports.listCatalog();
+          const entries = result && result.ok ? result.value : undefined;
+          const entry = Array.isArray(entries) ? entries.find((candidate) => candidate && candidate.id === id) : undefined;
+          const now = ports.now();
+          if (!(entry && isStalled(entry, now) && pastGrace(entry, now))) return 'skipped';
+          ran = true;
+          const outcome = await ports.runTask(id);
+          if (outcome && outcome.ok === false && outcome.error && outcome.error.code === ARCHIVED_CODE) {
+            state.book = markArchived(state.book, id, ports.now());
+            ports.persistBook(state.book);
+            return 'archived';
+          }
+          const admitted = outcome && outcome.ok === true ? outcome.value : undefined;
+          if (isAdmittedRun(admitted, id)) return await retire(id, admitted);
+          if (admitted && admitted.code !== undefined) return 'refused';
+          return 'run-failed';
+        } catch (_error) {
+          return ran ? 'run-failed' : 'skipped';
+        } finally {
+          inFlight.delete(id);
+        }
+      }
+
+      return {
+        /** Scan once: start every owned, due task that is not already in flight. `onOutcome(id, outcome)`
+         * fires as each one settles; the returned promise resolves with all of them. */
+        async scan({ entries, owned, book, onOutcome }) {
+          const state = { book };
+          const due = dueNudges({ entries, owned, book, now: ports.now() }).filter((id) => !inFlight.has(id));
+          const started = due.map((id) => {
+            inFlight.add(id);
+            state.book = applyAttempt(state.book, id, ports.now());
+            ports.persistBook(state.book);
+            return nudgeOne(id, state).then((outcome) => {
+              if (onOutcome) onOutcome(id, outcome);
+              return { id, outcome };
+            });
+          });
+          return Promise.all(started);
+        },
+      };
     }
 
     /** The most recent custom prompt (the strip shows exactly two chips: builtin + this). */
@@ -454,9 +583,21 @@ window.__ModuleLoader__.load({
       const highlightTimerRef = useRef(undefined);
       const busyRef = useRef(false);
       const pendingRef = useRef([]);
-      const nudgingRef = useRef(new Set());
+      const watchdogRef = useRef(undefined);
       const propsRef = useRef(props);
       propsRef.current = props;
+      if (watchdogRef.current === undefined) {
+        // One watchdog per mounted control: its in-flight set belongs to this instance (Q9).
+        watchdogRef.current = createWatchdog({
+          listCatalog: () => propsRef.current.listCatalog(),
+          runTask: (id) => propsRef.current.runTask(id),
+          cancelTask: (id, expectedUpdatedAt) => propsRef.current.cancelTask(id, expectedUpdatedAt),
+          persistBook: (book) => storeValue(STORE_NUDGES, book),
+          now: () => Date.now(),
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          isAlive: () => aliveRef.current,
+        });
+      }
       pendingRef.current = pending;
       const openRef = useRef(false);
       openRef.current = open;
@@ -487,56 +628,7 @@ window.__ModuleLoader__.load({
       const sessionId = typeof props.sessionId === 'string' ? props.sessionId : '';
       const canList = typeof props.listCatalog === 'function';
 
-      /** Nudge one stalled task through the official run-now face. Re-reads the catalog first so a
-       * task the Host just delivered itself is never delivered twice (run-now has no ended guard). */
-      async function nudge(id) {
-        const props = propsRef.current;
-        try {
-          if (typeof props.runTask !== 'function' || typeof props.listCatalog !== 'function') return;
-          const result = await props.listCatalog();
-          const entries = result && result.ok ? result.value : undefined;
-          const entry = Array.isArray(entries) ? entries.find((candidate) => candidate && candidate.id === id) : undefined;
-          if (!isStalledDelivery(entry, Date.now())) return;
-          const outcome = await props.runTask(id);
-          if (outcome && outcome.ok === false && outcome.error && outcome.error.code === ARCHIVED_CODE) {
-            markArchived(id);
-            return;
-          }
-          const admitted = outcome && outcome.ok === true ? outcome.value : undefined;
-          if (isAdmittedRun(admitted, id)) await retireDelivered(id, admitted);
-        } catch (_error) {
-          /* silent: the next poll retries within budget */
-        } finally {
-          nudgingRef.current.delete(id);
-        }
-      }
-
-      /** Delete a task whose run-now was admitted, while the Host still holds its next delivery back
-       * (60 s floor after the receipt). expectedUpdatedAt makes the Host refuse the delete when the task
-       * changed since the run; a refusal, a task already gone, or a closed window ends the retries. */
-      async function retireDelivered(id, delivered) {
-        const props = propsRef.current;
-        if (typeof props.cancelTask !== 'function') return;
-        const deadline = Date.parse(delivered.lastDelivery.deliveredAt) + RETIRE_WINDOW_MS;
-        for (;;) {
-          let result;
-          try {
-            result = await props.cancelTask(id, delivered.updatedAt);
-          } catch (_error) {
-            result = undefined;
-          }
-          if (result && result.ok === true) {
-            const code = result.value && result.value.code;
-            if (code === undefined || code === 'schedule_not_found') {
-              if (aliveRef.current) refreshPending();
-              return;
-            }
-            if (code === 'schedule_conflict') return;
-          }
-          if (!aliveRef.current || Date.now() + RETIRE_RETRY_MS > deadline) return;
-          await new Promise((resolve) => setTimeout(resolve, RETIRE_RETRY_MS));
-        }
-      }
+      // The delivery watchdog is a module (createWatchdog, factory scope); this control only wires its ports.
 
       const refreshPending = async () => {
         const sid = propsRef.current.sessionId;
@@ -549,61 +641,24 @@ window.__ModuleLoader__.load({
           entries = undefined;
         }
         if (!aliveRef.current) return;
-        const prefix = t('titlePrefix');
-        const isOurs = (entry) => entry && entry.status === 'active'
-          && entry.target && entry.target.kind === 'session' && entry.target.sessionId === sid;
-        if (!Array.isArray(entries)) {
-          // Catalog unavailable: fall back to the local registry so the badge stays honest.
-          setPending(loadRegistry().filter((r) => r.sessionId === sid)
-            .map((r) => ({ id: r.id, at: r.at, prompt: typeof r.prompt === 'string' ? r.prompt : '' })));
+        const merged = mergePending({ registry: loadRegistry(), catalog: entries, sid, markers: [t('titlePrefix')], now: Date.now() });
+        if (!merged.catalogAvailable) {
+          setPending(merged.pending);
           return;
         }
-        const byId = new Map(entries.map((entry) => [entry.id, entry]));
-        const live = [];
-        const seen = new Set();
-        const owned = new Set(); // catalog entries this session owns (registry id or title prefix) — NOT bare isOurs, which only matches the session
-        for (const r of loadRegistry()) {
-          const entry = byId.get(r.id);
-          if (entry && isOurs(entry) && !seen.has(r.id)) {
-            live.push({ id: r.id, at: entry.scheduledAt || r.at, prompt: typeof entry.prompt === 'string' ? entry.prompt : r.prompt || '' });
-            seen.add(r.id);
-            owned.add(r.id);
-          }
-        }
-        // Adopt tasks created elsewhere (another browser/device) that carry our title marker.
-        for (const entry of entries) {
-          if (isOurs(entry) && !seen.has(entry.id)
-            && typeof entry.title === 'string' && entry.title.startsWith(prefix)) {
-            live.push({ id: entry.id, at: entry.scheduledAt, prompt: typeof entry.prompt === 'string' ? entry.prompt : '' });
-            seen.add(entry.id);
-            owned.add(entry.id);
-          }
-        }
-        // Keep just-created entries the catalog does not know about yet (catalog can lag behind a create).
-        const now = Date.now();
-        for (const r of loadRegistry()) {
-          if (!seen.has(r.id) && r.sessionId === sid
-            && typeof r.ts === 'number' && now - r.ts < 300000) {
-            live.push({ id: r.id, at: r.at, prompt: typeof r.prompt === 'string' ? r.prompt : '' });
-            seen.add(r.id);
-          }
-        }
-        live.sort((a, b) => String(a.at).localeCompare(String(b.at)));
-        storeValue(STORE_PENDING, live.map((x) => ({ id: x.id, sessionId: sid, at: x.at, prompt: x.prompt })));
+        storeValue(STORE_PENDING, merged.pending.map((x) => ({ id: x.id, sessionId: sid, at: x.at, prompt: x.prompt })));
         // Delivery watchdog (silent): the Host timer loop drops failed one-shots, so a stalled
         // task can wait forever for the next unrelated schedule event. Nudge it via run-now
         // on a per-task budget; manual redelivery stays in the official automation page.
         // Scope = owned only (registry id or title prefix): the session's other active tasks
         // (e.g. hand-created in the official automation page) are never touched.
-        const nudges = loadNudges();
-        for (const entry of entries) {
-          if (!owned.has(entry.id) || nudgingRef.current.has(entry.id)) continue;
-          if (!isStalledDelivery(entry, now) || !autoNudgeDue(entry, nudges, now)) continue;
-          nudgingRef.current.add(entry.id);
-          recordNudge(entry.id, now);
-          void nudge(entry.id);
-        }
-        setPending(live);
+        void watchdogRef.current.scan({
+          entries,
+          owned: merged.owned,
+          book: loadNudges(),
+          onOutcome: (_id, outcome) => { if (outcome === 'retired' && aliveRef.current) refreshPending(); },
+        });
+        setPending(merged.pending);
       };
 
       // Refresh on mount, when the session changes, and after any mutation; light interval while a send is pending.
@@ -931,6 +986,8 @@ window.__ModuleLoader__.load({
     }
 
     return {
+      // Pure helpers and the watchdog module, exposed for the offline tests. The host reads only inject/apply.
+      internals: { mergePending, isStalled, pastGrace, dueNudges, applyAttempt, markArchived, isAdmittedRun, createWatchdog },
       inject: ['locale', 'slots', 'remote'],
       apply(ctx) {
         ensureFlashStyles();
