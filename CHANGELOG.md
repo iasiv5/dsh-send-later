@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.5
+
+The delivery watchdog no longer leaves a redelivered task behind to deliver the same message a second time.
+
+- A run-now the Host admits keeps the task's scheduled occurrence, and the Host delivers it again once its 60 s delivery floor clears. After an admitted run-now the watchdog now deletes the task at once, passing the `updatedAt` the run returned so a task changed in the meantime is left alone; a failed delete is retried every 3 s until that window closes. The task's delivery history goes with it.
+- A refused run-now (execution pending, not found) proves nothing was delivered and leaves the task untouched.
+
 ## 0.2.4
 
 The panel no longer dismisses itself after a successful schedule. The old auto-close read as "my entry vanished with the card": the confirmation and the fresh pending row were exactly what the user wanted to see, while a non-cancellable 1.6s timer killed the panel even mid-interaction — a stale timer could even close a panel reopened within the window.

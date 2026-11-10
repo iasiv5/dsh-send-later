@@ -1,6 +1,6 @@
 {
   "name": "dsh-send-later",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "DSH composer plugin that schedules a delayed message (e.g. Continue) into the current session",
   "icon": "./icon.svg",
   "type": "module",
