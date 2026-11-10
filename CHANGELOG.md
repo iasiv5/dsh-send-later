@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.6
+
+Four correctness fixes to the pending list and the delivery watchdog. What the watchdog delivers does not change.
+
+- Tasks created in another UI language are adopted. A device now recognises pending sends carrying either built-in title marker (「延时发送：」 or 「Send later: 」), so a send scheduled from an English-language device is listed here, and the watchdog protects it here too.
+- A send the catalog already knows as ended or moved no longer lingers in the pending list. A just-created send the catalog has not listed yet stays visible for 30 seconds, down from 5 minutes.
+- The redelivery budget counts an attempt only when a run is about to go out. A re-check that finds the task already delivered spends nothing, and an attempt that cannot be recorded in the ledger sends nothing.
+- A task the watchdog has retired leaves no entry in the redelivery ledger.
+
 ## 0.2.5
 
 The delivery watchdog no longer leaves a redelivered task behind to deliver the same message a second time.
