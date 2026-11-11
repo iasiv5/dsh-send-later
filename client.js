@@ -626,6 +626,10 @@ window.__ModuleLoader__.load({
       openRef.current = open;
       const quotaRef = useRef(quota);
       quotaRef.current = quota;
+      const choiceRef = useRef(choice);
+      choiceRef.current = choice;
+      /** True once the user types their own instant into the 指定 fields; a typed edit always wins. */
+      const customTouchedRef = useRef(false);
       /** One-shot fresh-row highlight; every transition that ends a scheduling session clears it. */
       const clearFlash = () => {
         if (highlightTimerRef.current !== undefined) {
@@ -641,6 +645,24 @@ window.__ModuleLoader__.load({
           highlightTimerRef.current = undefined;
           if (aliveRef.current) setHighlightId(undefined);
         }, 1600);
+      };
+
+      /** The default instant for the 指定 fields: the GLM 5h reset instant plus two minutes of
+       *  slack when fresh quota data exists, otherwise one hour ahead. */
+      const customDefaultWhen = () => {
+        const q = quotaRef.current;
+        if (q && q.resetAt) {
+          const candidate = new Date(q.resetAt + 120000);
+          const lead = candidate.getTime() - Date.now();
+          if (lead >= 120000 && lead <= 7 * 3600000) return candidate;
+        }
+        return new Date(Date.now() + 3600000);
+      };
+      /** Overwrite the 指定 fields with the default; every caller has already decided overwriting is intended. */
+      const applyCustomDefault = () => {
+        const when = customDefaultWhen();
+        setDate(dateValue(when));
+        setTime(timeValue(when));
       };
 
       useEffect(() => () => {
@@ -716,8 +738,21 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!open) return undefined;
         refreshPending();
+        // Opening with 指定 already selected (the remembered preset) must land on the same
+        // default a chip click sets — not on the stale mount-time fallback. The chip's click
+        // handler never fires in this path, so the fill has to happen here (feedback: the
+        // preview was only correct after toggling to another chip and back).
+        if (choiceRef.current === 'custom' && !customTouchedRef.current) applyCustomDefault();
         if (typeof propsRef.current.fetchQuota === 'function') {
-          propsRef.current.fetchQuota().then((q) => { if (aliveRef.current) setQuota(q && q.resetAt ? q : null); }).catch(() => {});
+          propsRef.current.fetchQuota().then((q) => {
+            if (!aliveRef.current) return;
+            const next = q && q.resetAt ? q : null;
+            setQuota(next);
+            quotaRef.current = next; // set before the next render, so the fill below reads fresh data
+            // Cold mount: the open fill above ran before quota data existed. Converge once it
+            // arrives, unless the user has already typed their own instant in the meantime.
+            if (choiceRef.current === 'custom' && !customTouchedRef.current) applyCustomDefault();
+          }).catch(() => {});
         }
         const onPointer = (event) => {
           if (panelRef.current && panelRef.current.contains(event.target)) return;
@@ -921,18 +956,10 @@ window.__ModuleLoader__.load({
             setChoice(item.id);
             setMessage(undefined);
             if (item.id === 'custom') {
-              // Prefer the GLM 5h reset instant plus two minutes of slack as the default;
-              // fall back to one hour ahead when no fresh quota data exists.
-              const q = quotaRef.current;
-              let when;
-              if (q && q.resetAt) {
-                const candidate = new Date(q.resetAt + 120000);
-                const lead = candidate.getTime() - Date.now();
-                if (lead >= 120000 && lead <= 7 * 3600000) when = candidate;
-              }
-              if (when === undefined) when = new Date(Date.now() + 3600000);
-              setDate(dateValue(when));
-              setTime(timeValue(when));
+              // Re-selecting 指定 asks for the default again (GLM 5h reset + 2 min, or one
+              // hour ahead without quota data); it also discards any typed instant.
+              customTouchedRef.current = false;
+              applyCustomDefault();
             }
           },
           style: S.chip(item.id === choice),
@@ -940,9 +967,9 @@ window.__ModuleLoader__.load({
         choice === 'custom'
           ? h('div', { style: S.row },
             h('label', { style: S.field }, t('date'),
-              h('input', { type: 'date', value: date, onChange: (event) => setDate(event.target.value), style: S.input })),
+              h('input', { type: 'date', value: date, onChange: (event) => { customTouchedRef.current = true; setDate(event.target.value); }, style: S.input })),
             h('label', { style: S.field }, t('time'),
-              h('input', { type: 'time', value: time, onChange: (event) => setTime(event.target.value), style: S.input })))
+              h('input', { type: 'time', value: time, onChange: (event) => { customTouchedRef.current = true; setTime(event.target.value); }, style: S.input })))
           : null,
         h('div', { style: S.fieldRow },
           h('label', { htmlFor: 'dsh-send-later-prompt', style: S.fieldLabel }, t('promptLabel')),

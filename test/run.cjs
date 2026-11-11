@@ -429,6 +429,52 @@ const injected = slot.inject('session-test-1');
   });
   await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
 
+  // 13b. Regression: the remembered preset itself is 指定. Opening the panel must land on the
+  // same default the chip click sets, with zero chip interaction — the click handler never
+  // fires on this path, so the fill has to happen at open time (feedback: the preview stayed
+  // wrong until another chip was picked and 指定 clicked again). A fresh mount reproduces the
+  // reload case; the quota fetch then settles and the fill converges onto reset+2 min.
+  const remountDiv = win.document.createElement('div');
+  win.document.body.appendChild(remountDiv);
+  win.localStorage.clear();
+  win.localStorage.setItem('dsh-send-later:v1:preset', JSON.stringify('custom'));
+  win.fetch = async () => ({ ok: true, json: async () => ({ providers: [
+    { key: "glm", status: "ready", plan: { windows: [{ key: "5h", percent: 39, resetsAt: new Date(Date.now() + 7200000).toISOString() }] } },
+    { key: "copilot", status: "ready" },
+  ] }) });
+  const remountRoot = createRoot(remountDiv);
+  await act(async () => { remountRoot.render(React.createElement(slot.component, injected)); });
+  await act(async () => { await sleep(50); });
+  const remountButton = remountDiv.querySelector('button[aria-label="延时发送"]');
+  await act(async () => { remountButton.click(); });
+  await act(async () => { await sleep(30); }); // open-time quota fetch settles → fill converges
+  dialog = dialogNode();
+  check('remembered 指定 preset is selected on open without any chip click', () => assert.equal(
+    findButton(dialog, '指定').getAttribute('aria-pressed'), 'true'));
+  const expectedOpen = new Date(Date.now() + 7200000 + 120000);
+  const allowedHm = (when) => [0, -60000, 60000].map((delta) => hm(new Date(when.getTime() + delta)));
+  check('remembered 指定 preset: fields hold reset+2min right on open (no chip click)', () => {
+    assert.equal(dialog.querySelector('input[type="date"]').value, ymd(expectedOpen));
+    assert.ok(allowedHm(expectedOpen).includes(dialog.querySelector('input[type="time"]').value),
+      `time was: ${dialog.querySelector('input[type="time"]').value}`);
+  });
+  check('remembered 指定 preset: the preview shows reset+2min without toggling chips', () => {
+    const match = dialog.textContent.match(/将于 (\d{2}:\d{2}) 发送到本会话/);
+    assert.ok(match, `preview was: ${dialog.textContent.slice(0, 120)}`);
+    assert.ok(allowedHm(expectedOpen).includes(match[1]), `preview was: ${match[1]}`);
+  });
+  // A typed instant survives reopening: the open-time fill must never clobber a user edit.
+  await act(async () => { setValue(dialog.querySelector('input[type="time"]'), '09:00'); });
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  await act(async () => { remountButton.click(); });
+  dialog = dialogNode();
+  check('a typed custom time survives close and reopen', () => assert.equal(
+    dialog.querySelector('input[type="time"]').value, '09:00'));
+  await act(async () => { win.document.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  await act(async () => { remountRoot.unmount(); });
+  remountDiv.remove();
+  delete win.fetch;
+
   // W. Delivery watchdog (silent auto-redelivery via schedule/run). Every W scenario seeds its own
   // preconditions (catalog, run/edit stubs, budget ledger, panel state), so none depends on another.
   const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
