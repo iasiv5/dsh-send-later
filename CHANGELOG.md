@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.7
+
+Opening the panel with 指定 (custom) already selected now lands on the smart default immediately.
+
+- The GLM 5h-reset + 2 min prefill used to live only in the 指定 chip's click handler, so when 指定 was the remembered preset the panel opened with the stale mount-time fallback (one hour ahead, possibly already past) — the correct time appeared only after picking another chip and clicking 指定 again. The same fill now runs whenever the panel opens with 指定 selected, and once more when the quota snapshot arrives, so a cold page load converges too.
+- A time the user typed by hand always wins: the open-time fill never overwrites a typed instant (and re-selecting the 指定 chip still resets to the default, as before).
+
 ## 0.2.6
 
 Four correctness fixes to the pending list and the delivery watchdog. What the watchdog delivers does not change.
