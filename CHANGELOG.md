@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.7
+## 0.2.8
 
 Opening the panel with 指定 (custom) already selected now lands on the smart default immediately.
 
