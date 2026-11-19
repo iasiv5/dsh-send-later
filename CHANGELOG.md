@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.9
+
+Housekeeping release: manifest metadata joins the dsh-m family-wide unification, README badges normalised.
+
+- `dsh.engines.dsh` floor unified to `>=0.2.0-rc.1` (no upper bound) and the cordis peer to floor-only `>=4.0.2`, matching the family-wide S1/S2 decision; install-gate semantics unchanged for current hosts.
+- `package.json` description now mirrors the registry copy (input-box timer, persisted tasks, online redelivery, optional quota-watch integration).
+- README: badges moved out of the centered HTML block into the family-standard four-slot markdown row (CI / npm / License / DSH 0.2.2-rc.5 verified); the node badge was dropped (engines already carries it).
+
 ## 0.2.8
 
 Opening the panel with 指定 (custom) already selected now lands on the smart default immediately.
