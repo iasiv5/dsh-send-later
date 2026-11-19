@@ -4,7 +4,7 @@
   <a href="https://www.npmjs.com/package/dsh-send-later"><img src="https://img.shields.io/npm/v/dsh-send-later" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/npm/l/dsh-send-later" alt="license"></a>
   <img src="https://img.shields.io/node/v/dsh-send-later" alt="node version">
-  <a href="#%EF%B8%8F-%E5%B7%B2%E7%9F%A5%E9%99%90%E5%88%B6"><img src="https://img.shields.io/badge/DSH-0.2.2--rc.1%20verified-2563eb" alt="DSH 0.2.2-rc.1 verified"></a>
+  <a href="#%EF%B8%8F-%E5%B7%B2%E7%9F%A5%E9%99%90%E5%88%B6"><img src="https://img.shields.io/badge/DSH-0.2.2--rc.5%20verified-2563eb" alt="DSH 0.2.2-rc.5 verified"></a>
 </p>
 
 <p align="center"><b>延时发送</b> —— 为 DeepSeek Harness（DSH）打造的定时消息插件。<br>
