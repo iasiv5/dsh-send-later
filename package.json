@@ -1,7 +1,7 @@
 {
   "name": "dsh-send-later",
   "version": "0.2.8",
-  "description": "DSH composer plugin that schedules a delayed message (e.g. Continue) into the current session",
+  "description": "输入框旁定时或延时发送（默认「继续」），到点自动发进会话，任务持久化、在线自动补投；可选集成 quota-watch。",
   "icon": "./icon.svg",
   "type": "module",
   "main": "./index.js",
