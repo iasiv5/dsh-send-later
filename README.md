@@ -1,11 +1,6 @@
 # dsh-send-later
 
-<p align="center">
-  <a href="https://github.com/iasiv5/dsh-send-later/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/iasiv5/dsh-send-later/ci.yml?branch=main&label=CI" alt="CI"></a>
-  <a href="https://www.npmjs.com/package/dsh-send-later"><img src="https://img.shields.io/npm/v/dsh-send-later?label=npm" alt="npm"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/iasiv5/dsh-send-later?label=License" alt="License"></a>
-  <a href="#%EF%B8%8F-%E5%B7%B2%E7%9F%A5%E9%99%90%E5%88%B6"><img src="https://img.shields.io/badge/DSH-0.2.2--rc.5%20verified-2563eb" alt="DSH 0.2.2-rc.5 verified"></a>
-</p>
+[![CI](https://img.shields.io/github/actions/workflow/status/iasiv5/dsh-send-later/ci.yml?branch=main&label=CI)](https://github.com/iasiv5/dsh-send-later/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/dsh-send-later?label=npm)](https://www.npmjs.com/package/dsh-send-later) [![License](https://img.shields.io/github/license/iasiv5/dsh-send-later?label=License)](./LICENSE) [![DSH](https://img.shields.io/badge/DSH-0.2.2--rc.5%20verified-2563eb)](#%EF%B8%8F-%E5%B7%B2%E7%9F%A5%E9%99%90%E5%88%B6)
 
 <p align="center"><b>延时发送</b> —— 为 DeepSeek Harness（DSH）打造的定时消息插件。<br>
 在输入框旁设定延时或指定时间，到点自动向当前会话发送一条消息（默认「继续」）。</p>
